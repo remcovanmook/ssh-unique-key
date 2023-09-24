@@ -1,6 +1,6 @@
 #! /bin/bash
 
-KEYDIR=~/.ssh/key
+KEYDIR=~/.ssh/keys
 KEYTYPE=ecdsa
 KEYOPTS=""
 
