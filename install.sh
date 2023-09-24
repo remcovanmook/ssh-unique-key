@@ -1,16 +1,22 @@
 #! /bin/bash
 
-mkdir -p ~/bin
-cp bin/* ~/bin/
+INSTALLDIR=~/bin
+SSHDIR=~/.ssh
 
-mkdir -p ~/.ssh/keys
+mkdir -p ${INSTALLDIR}
+cp bin/* ${INSTALLDIR}/
+chmod +x ${INSTALLDIR}/ssh-new
+chmod +x ${INSTALLDIR}/ssh-del
 
-if [ i! -f ~/.ssh/config ]
+mkdir -p ${SSHDIR}/keys
+
+if [ ! -f ${SSHDIR}/config ];
 then
-  touch .ssh/config
+  touch ${SSHDIR}/config
 fi
 
-cat << EOF >> ~/.ssh/config
+# This snippet should always be at the END of your local ssh client config
+cat >> ${SSHDIR}/config << EOF
 Host *
         IdentityFile ~/.ssh/keys/%r@%h
 EOF
