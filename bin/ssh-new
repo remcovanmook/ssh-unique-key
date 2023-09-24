@@ -1,0 +1,35 @@
+#! /bin/bash
+
+KEYDIR=~/.ssh/key
+KEYTYPE=ecdsa
+KEYOPTS=""
+
+if [ -z "$1" ]
+then
+        echo "usage: $0 [user@]host"
+        exit 1
+fi
+if [ `echo $1 | grep -q '@'` ]
+then
+        USER=`echo $1 | cut -f1 -d "@"`
+        HOST=`echo $1 | cut -f2 -d "@"`
+else
+        USER=`whoami`
+        HOST=$1
+fi
+
+KEYFILE="$KEYDIR/$USER@$HOST"
+
+if [ -f $KEYFILE ]
+then
+        # Check if the key is already accepted, if not, copy it and retry connecting
+        ssh -q -F /dev/null -i $KEYFILE -o IdentitiesOnly=yes -o PreferredAuthentications=publickey $1 || (
+                ssh-copy-id -f -i $KEYFILE $1 || ( echo Copying key to remote host failed. Exiting.; exit 1 )
+                ssh $1
+        )
+else
+        echo "Going to create a new key for user $USER&$HOST.."
+        ssh-keygen -q -t $KEYTYPE -f $KEYFILE -N "" $KEYOPTS
+        ssh-copy-id -f -i $KEYFILE $1
+        ssh $1
+fi
