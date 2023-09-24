@@ -10,7 +10,7 @@ chmod +x ${INSTALLDIR}/ssh-del
 
 mkdir -p ${SSHDIR}/keys
 
-if [ ! -f ${SSHDIR}/config ];
+if [ ! -f ${SSHDIR}/config ]
 then
   touch ${SSHDIR}/config
 fi
