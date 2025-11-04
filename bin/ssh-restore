@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+# Parse arguments
+BACKUP_PATH=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i|--input)
+            BACKUP_PATH="$2"
+            shift 2
+            ;;
+        *)
+            err "Usage: ssh-restore -i <backup-file>"
+            ;;
+    esac
+done
+
+[ -z "$BACKUP_PATH" ] && err "No backup file specified"
+[ ! -f "$BACKUP_PATH" ] && err "Backup file not found: $BACKUP_PATH"
+
+# Create temporary directory for restore
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+# Extract backup
+echo "Extracting backup..."
+tar -xzf "$BACKUP_PATH" -C "$TEMP_DIR"
+
+# Verify manifest
+if [ ! -f "$TEMP_DIR/manifest.txt" ]; then
+    err "Invalid backup file: manifest.txt not found"
+fi
+
+# Verify backup structure
+for dir in "host-uuid" "by-key" "templates" "conf.d"; do
+    if [ ! -d "$TEMP_DIR/unique_keys/$dir" ]; then
+        err "Invalid backup file: $dir directory not found"
+    fi
+done
+
+# Backup existing configuration
+if [ -d "$BASE_DIR" ]; then
+    BACKUP_SUFFIX=$(date +%Y%m%d-%H%M%S)
+    echo "Backing up existing configuration..."
+    mv "$BASE_DIR" "${BASE_DIR}.backup-${BACKUP_SUFFIX}"
+fi
+
+# Restore configuration
+echo "Restoring configuration..."
+mkdir -p "$(dirname "$BASE_DIR")"
+cp -a "$TEMP_DIR/unique_keys" "$BASE_DIR"
+
+# Fix permissions
+chmod 700 "$BASE_DIR"
+find "$BASE_DIR" -type d -exec chmod 700 {} \;
+find "$BASE_DIR" -type f -name "*.pub" -exec chmod 644 {} \;
+find "$BASE_DIR" -type f -name "id_*" ! -name "*.pub" -exec chmod 600 {} \;
+
+echo "Restore completed successfully"
+log "INFO" "Restored backup from $BACKUP_PATH"

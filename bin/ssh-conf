@@ -1,0 +1,67 @@
+#!/bin/bash
+set -e
+
+# Find and source the common include file
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+# --- Main Logic ---
+if [ "$#" -lt 1 ]; then
+    echo "Usage:"
+    echo "  ssh-conf <host>                      # View config"
+    echo "  ssh-conf <host> <Option> <Value>     # Add/Update config"
+    echo "  ssh-conf <host> --remove <Option>    # Remove config"
+    err "Invalid arguments."
+fi
+
+HOST_NAME="$1"
+
+# Find the canonical path using the snippet
+CANONICAL_PATH=$(get_uuid_path_from_host "$HOST_NAME")
+[ -z "$CANONICAL_PATH" ] && err "Host '$HOST_NAME' not registered. Run 'ssh-new' first."
+
+# This is the custom config file, included by the snippet
+CONFIG_FILE="$CANONICAL_PATH/config"
+touch "$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE"
+
+COMMAND="${2:-}"
+OPTION="$2"
+VALUE="$3"
+
+case "$COMMAND" in
+    "")
+        # --- View Config ---
+        echo "Config for $HOST_NAME ($CONFIG_FILE):"
+        cat "$CONFIG_FILE"
+        ;;
+
+    "--remove")
+        # --- Remove Config ---
+        OPTION="$3"
+        [ -z "$OPTION" ] && err "Please specify an option to remove."
+        
+        # Use sed to remove the line in-place. (Case-insensitive)
+        sed -i.bak "/^${OPTION}\s/I d" "$CONFIG_FILE"
+        rm -f "$CONFIG_FILE.bak"
+        echo "Removed '$OPTION' from $HOST_NAME."
+        ;;
+        
+    *)
+        # --- Add/Update Config ---
+        [ -z "$VALUE" ] && err "Please provide a value for $OPTION."
+        
+        # Check if option already exists (case-insensitive)
+        if grep -q -i "^${OPTION}\s" "$CONFIG_FILE"; then
+            # Update existing line
+            sed -i.bak "s/^${OPTION}\s.*/${OPTION} ${VALUE}/I" "$CONFIG_FILE"
+            echo "Updated '$OPTION' for $HOST_NAME."
+        else
+            # Add new line
+            echo "${OPTION} ${VALUE}" >> "$CONFIG_FILE"
+            echo "Added '$OPTION' to $HOST_NAME."
+        fi
+        rm -f "$CONFIG_FILE.bak"
+        ;;
+esac

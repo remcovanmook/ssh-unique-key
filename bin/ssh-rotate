@@ -1,0 +1,86 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+[ "$#" -ne 1 ] && err "Usage: ssh-rotate <hostname>"
+HOST_NAME="$1"
+
+validate_hostname "$HOST_NAME"
+
+CONFIG_SNIPPET_FILE="$CONFIG_DIR/$HOST_NAME"
+[ ! -f "$CONFIG_SNIPPET_FILE" ] && err "No config found for '$HOST_NAME'."
+
+# Get current UUID and paths
+OLD_PATH=$(get_uuid_path_from_host "$HOST_NAME")
+[ -z "$OLD_PATH" ] && exit 1
+OLD_UUID=$(basename "$OLD_PATH")
+
+# Scan for new host key
+echo "Scanning host $HOST_NAME for new keys..."
+RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME")
+NEW_UUID=$(get_host_uuid_from_scan_data "$RAW_SCAN_DATA")
+
+if [ "$OLD_UUID" == "$NEW_UUID" ]; then
+    err "Host key has not changed. Nothing to do."
+fi
+
+# Backup existing configuration
+echo "Creating backup before rotation..."
+"$SCRIPT_DIR/ssh-backup"
+
+# Create new canonical directory
+NEW_PATH="$UUID_DIR/$NEW_UUID"
+mkdir -p -m 700 "$NEW_PATH"
+
+echo "Rotating from $OLD_UUID to $NEW_UUID..."
+
+# Store new host keys
+echo "$RAW_SCAN_DATA" > "$NEW_PATH/known_host_keys"
+chmod 644 "$NEW_PATH/known_host_keys"
+
+# Migrate user keys and configs
+if [ -d "$OLD_PATH" ]; then
+    # Copy all user directories
+    for user_dir in "$OLD_PATH"/*; do
+        if [ -d "$user_dir" ]; then
+            user=$(basename "$user_dir")
+            cp -a "$user_dir" "$NEW_PATH/"
+            echo "Migrated keys for user: $user"
+        fi
+    done
+    
+    # Copy host-specific config if it exists
+    if [ -f "$OLD_PATH/config" ]; then
+        cp "$OLD_PATH/config" "$NEW_PATH/"
+        chmod 600 "$NEW_PATH/config"
+    fi
+fi
+
+# Update symlink in by-key
+if [ -L "$KEY_DIR/$OLD_UUID" ]; then
+    rm "$KEY_DIR/$OLD_UUID"
+fi
+ln -s "../host-uuid/$NEW_UUID" "$KEY_DIR/$NEW_UUID"
+
+# Update config snippet
+sed -i.bak "s/UUID: $OLD_UUID/UUID: $NEW_UUID/" "$CONFIG_SNIPPET_FILE"
+rm "${CONFIG_SNIPPET_FILE}.bak"
+
+echo "Host key rotation completed successfully"
+echo "Old UUID: $OLD_UUID"
+echo "New UUID: $NEW_UUID"
+echo "New identity path: $NEW_PATH"
+
+# Ask about cleaning up old identity
+read -p "Delete old host identity? (y/N) " confirm
+if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+    rm -rf "$OLD_PATH"
+    echo "Old identity removed."
+else
+    echo "Old identity preserved at: $OLD_PATH"
+fi
+
+log "INFO" "Rotated host key for $HOST_NAME from $OLD_UUID to $NEW_UUID"

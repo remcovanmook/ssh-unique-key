@@ -1,0 +1,166 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+usage() {
+    echo "Usage: ssh-history [options] [command]"
+    echo
+    echo "Commands:"
+    echo "  list              List all recorded actions"
+    echo "  keys [host]       Show all keys installed (optionally for specific host)"
+    echo "  templates         Show template usage and operations"
+    echo "  hosts            Show host key changes and operations"
+    echo "  search <term>    Search through history"
+    echo
+    echo "Options:"
+    echo "  -j, --json       Output in JSON format"
+    echo "  -n, --limit N    Limit output to N entries"
+    echo "  -f, --from DATE  Show entries from DATE (YYYY-MM-DD)"
+    echo "  -t, --to DATE    Show entries until DATE (YYYY-MM-DD)"
+    exit 1
+}
+
+# Parse arguments
+COMMAND=""
+SEARCH_TERM=""
+JSON_OUTPUT=0
+LIMIT=""
+FROM_DATE=""
+TO_DATE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -j|--json)
+            JSON_OUTPUT=1
+            shift
+            ;;
+        -n|--limit)
+            LIMIT="$2"
+            shift 2
+            ;;
+        -f|--from)
+            FROM_DATE="$2"
+            shift 2
+            ;;
+        -t|--to)
+            TO_DATE="$2"
+            shift 2
+            ;;
+        list|keys|templates|hosts)
+            COMMAND="$1"
+            shift
+            ;;
+        search)
+            COMMAND="search"
+            SEARCH_TERM="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            if [ "$COMMAND" = "keys" ]; then
+                HOST="$1"
+                shift
+            else
+                usage
+            fi
+            ;;
+    esac
+done
+
+[ -z "$COMMAND" ] && usage
+[ ! -f "$HISTORY_FILE" ] && err "No history file found at $HISTORY_FILE"
+
+# Apply date filters if specified
+FILTER_CMD="cat"
+if [ -n "$FROM_DATE" ]; then
+    FILTER_CMD="$FILTER_CMD | awk -F'\"' '\$4 >= \"${FROM_DATE}T00:00:00Z\"'"
+fi
+if [ -n "$TO_DATE" ]; then
+    FILTER_CMD="$FILTER_CMD | awk -F'\"' '\$4 <= \"${TO_DATE}T23:59:59Z\"'"
+fi
+
+# Apply limit if specified
+if [ -n "$LIMIT" ]; then
+    FILTER_CMD="$FILTER_CMD | head -n $LIMIT"
+fi
+
+format_output() {
+    if [ $JSON_OUTPUT -eq 1 ]; then
+        cat
+    else
+        # Pretty print JSON entries
+        while IFS= read -r line; do
+            timestamp=$(echo "$line" | jq -r .timestamp)
+            action=$(echo "$line" | jq -r .action)
+            data=$(echo "$line" | jq -r .data)
+            case "$action" in
+                key_install)
+                    key_type=$(echo "$data" | jq -r .key_type)
+                    user_host=$(echo "$data" | jq -r .user_host)
+                    template=$(echo "$data" | jq -r .template)
+                    if [ "$template" != "null" ]; then
+                        echo "[$timestamp] Installed $key_type key for $user_host (template: $template)"
+                    else
+                        echo "[$timestamp] Installed $key_type key for $user_host"
+                    fi
+                    ;;
+                key_remove)
+                    user_host=$(echo "$data" | jq -r .user_host)
+                    echo "[$timestamp] Removed key for $user_host"
+                    ;;
+                template_operation)
+                    operation=$(echo "$data" | jq -r .operation)
+                    template=$(echo "$data" | jq -r .template)
+                    echo "[$timestamp] Template $operation: $template"
+                    ;;
+                host_key_change)
+                    host=$(echo "$data" | jq -r .host)
+                    echo "[$timestamp] Host key changed for $host"
+                    ;;
+                backup_operation)
+                    operation=$(echo "$data" | jq -r .operation)
+                    path=$(echo "$data" | jq -r .path)
+                    echo "[$timestamp] $operation: $path"
+                    ;;
+            esac
+        done
+    fi
+}
+
+case "$COMMAND" in
+    list)
+        eval "cat '$HISTORY_FILE' | $FILTER_CMD" | format_output
+        ;;
+    keys)
+        if [ -n "$HOST" ]; then
+            eval "cat '$HISTORY_FILE' | $FILTER_CMD" | \
+                jq -c "select(.action == \"key_install\" or .action == \"key_remove\") | 
+                    select(.data.user_host | contains(\"$HOST\"))" | \
+                format_output
+        else
+            eval "cat '$HISTORY_FILE' | $FILTER_CMD" | \
+                jq -c "select(.action == \"key_install\" or .action == \"key_remove\")" | \
+                format_output
+        fi
+        ;;
+    templates)
+        eval "cat '$HISTORY_FILE' | $FILTER_CMD" | \
+            jq -c "select(.action == \"template_operation\")" | \
+            format_output
+        ;;
+    hosts)
+        eval "cat '$HISTORY_FILE' | $FILTER_CMD" | \
+            jq -c "select(.action == \"host_key_change\")" | \
+            format_output
+        ;;
+    search)
+        eval "cat '$HISTORY_FILE' | $FILTER_CMD" | \
+            jq -c "select(. | tostring | contains(\"$SEARCH_TERM\"))" | \
+            format_output
+        ;;
+esac

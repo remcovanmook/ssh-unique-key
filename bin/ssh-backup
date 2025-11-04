@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+# Parse arguments
+BACKUP_PATH=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o|--output)
+            BACKUP_PATH="$2"
+            shift 2
+            ;;
+        *)
+            err "Unknown argument: $1"
+            ;;
+    esac
+done
+
+# Set default backup path if not specified
+if [ -z "$BACKUP_PATH" ]; then
+    BACKUP_PATH="${BACKUP_DIR}/backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+fi
+
+# Ensure backup directory exists
+mkdir -p -m 700 "$(dirname "$BACKUP_PATH")"
+
+# Create temporary directory for backup
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+# Copy directory structure with correct permissions
+echo "Copying configuration..."
+cp -a "$BASE_DIR" "$TEMP_DIR/"
+
+# Create backup manifest
+cat > "$TEMP_DIR/manifest.txt" << EOF
+SSH Unique Key Backup
+Created: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+User: $USER
+Hostname: $(hostname)
+Version: 1.0
+EOF
+
+# Create encrypted backup
+echo "Creating backup archive..."
+tar -czf "$BACKUP_PATH" -C "$TEMP_DIR" .
+chmod 600 "$BACKUP_PATH"
+
+echo "Backup created successfully at: $BACKUP_PATH"
+log "INFO" "Created backup at $BACKUP_PATH"

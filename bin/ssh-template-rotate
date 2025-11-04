@@ -1,0 +1,122 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+# --- Argument Parsing ---
+KEY_TYPE=""
+TEMPLATE_NAME=""
+FORCE=0
+
+usage() {
+    echo "Usage: ssh-template-rotate [-f|--force] -t <type> <template-name>"
+    echo "Options:"
+    echo "  -t, --type     Key type to rotate (ed25519, ecdsa, rsa)"
+    echo "  -f, --force    Skip confirmation prompts"
+    echo "Example: ssh-template-rotate -t ed25519 work"
+    exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -t|--type)
+            KEY_TYPE="$2"
+            shift 2
+            ;;
+        -f|--force)
+            FORCE=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            if [ -z "$TEMPLATE_NAME" ]; then
+                TEMPLATE_NAME="$1"
+                shift
+            else
+                usage
+            fi
+            ;;
+    esac
+done
+
+# --- Validation ---
+[ -z "$TEMPLATE_NAME" ] && err "No template name specified"
+[ -z "$KEY_TYPE" ] && err "No key type specified"
+
+validate_template "$TEMPLATE_NAME"
+validate_key_type "$KEY_TYPE"
+
+TEMPLATE_PATH="$TEMPLATE_DIR/$TEMPLATE_NAME"
+OLD_KEY="$TEMPLATE_PATH/id_$KEY_TYPE"
+OLD_KEY_PUB="$OLD_KEY.pub"
+
+# Check if key exists
+[ ! -f "$OLD_KEY" ] && err "No $KEY_TYPE key found in template $TEMPLATE_NAME"
+
+# Get affected hosts
+AFFECTED_HOSTS=($(get_hosts_using_template "$TEMPLATE_NAME"))
+if [ ${#AFFECTED_HOSTS[@]} -eq 0 ]; then
+    err "No hosts are using template $TEMPLATE_NAME"
+fi
+
+# Show affected hosts
+echo "The following hosts use template '$TEMPLATE_NAME':"
+printf '%s\n' "${AFFECTED_HOSTS[@]}"
+
+if [ $FORCE -eq 0 ]; then
+    read -p "Rotate $KEY_TYPE key for these hosts? (y/N) " confirm
+    [[ "$confirm" != [yY] ]] && err "Operation cancelled"
+fi
+
+# Create backup first
+echo "Creating backup..."
+"$SCRIPT_DIR/ssh-backup"
+
+# Generate new key
+echo "Generating new $KEY_TYPE key for template..."
+NEW_KEY_TEMP=$(mktemp)
+NEW_KEY_PUB_TEMP=$(mktemp)
+trap 'rm -f "$NEW_KEY_TEMP" "$NEW_KEY_PUB_TEMP"' EXIT
+
+ssh-keygen -t "$KEY_TYPE" -f "$NEW_KEY_TEMP" -N "" -C "template:$TEMPLATE_NAME ($(date +%Y-%m-%d))"
+
+# Process each host
+for host in "${AFFECTED_HOSTS[@]}"; do
+    echo "Processing $host..."
+    
+    # Get host path
+    HOST_PATH=$(get_uuid_path_from_host "$host")
+    [ -z "$HOST_PATH" ] && continue
+    
+    # Find all user directories using this template
+    while IFS= read -r user_dir; do
+        if [ -L "$user_dir/id_$KEY_TYPE" ] && readlink "$user_dir/id_$KEY_TYPE" | grep -q "$TEMPLATE_NAME"; then
+            echo "Updating keys for user $(basename "$user_dir") on $host..."
+            
+            # Remove old symlinks
+            rm -f "$user_dir/id_$KEY_TYPE" "$user_dir/id_$KEY_TYPE.pub"
+            
+            # Create new symlinks
+            (cd "$user_dir" && \
+             ln -s "../../templates/$TEMPLATE_NAME/id_$KEY_TYPE" "id_$KEY_TYPE" && \
+             ln -s "../../templates/$TEMPLATE_NAME/id_$KEY_TYPE.pub" "id_$KEY_TYPE.pub")
+        fi
+    done < <(find "$HOST_PATH" -type d -mindepth 1 -maxdepth 1)
+done
+
+# Replace the old key with the new one
+mv "$NEW_KEY_TEMP" "$OLD_KEY"
+mv "$NEW_KEY_PUB_TEMP" "$OLD_KEY_PUB"
+chmod 600 "$OLD_KEY"
+chmod 644 "$OLD_KEY_PUB"
+
+echo "Template key rotation completed successfully"
+echo "New public key:"
+cat "$OLD_KEY_PUB"
+echo
+echo "You may need to update this key on your remote hosts"
+log "INFO" "Rotated $KEY_TYPE key for template $TEMPLATE_NAME affecting ${#AFFECTED_HOSTS[@]} hosts"

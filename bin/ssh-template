@@ -1,0 +1,142 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+ensure_base_dirs
+
+# --- Usage ---
+usage() {
+    echo "Usage:"
+    echo "  ssh-template list                   # List all templates and their hosts"
+    echo "  ssh-template create <name>            # Create a new template directory"
+    echo "  ssh-template remove <name>            # Remove a template and linked configs"
+    echo "  ssh-template generate-keys <name>   # Generate all key types for a template"
+    echo "  ssh-template edit-config <name>     # Create/Edit the template's base config"
+    exit 1
+}
+
+[ "$#" -lt 1 ] && usage
+COMMAND="$1"
+TEMPLATE_NAME="${2:-}" # Set to empty string if not provided
+TEMPLATE_PATH="$TEMPLATE_DIR/$TEMPLATE_NAME"
+
+# --- Main Logic ---
+case "$COMMAND" in
+    list)
+        if [ ! -d "$TEMPLATE_DIR" ] || [ -z "$(ls -A "$TEMPLATE_DIR")" ]; then
+            echo "No templates found."
+            exit 0
+        fi
+        
+        echo "Available templates:"
+        for template in $(ls -1 "$TEMPLATE_DIR"); do
+            echo "  - $template"
+            TEMPLATE_CONFIG_PATH="$TEMPLATE_DIR/$template/config"
+            
+            # Find all host configs that include this template's config file
+            HOSTS=$(grep -l "Include $TEMPLATE_CONFIG_PATH" "$CONFIG_DIR"/* 2>/dev/null || true)
+            
+            if [ -n "$HOSTS" ]; then
+                echo "    Hosts using this template:"
+                for host_config_file in $HOSTS; do
+                    echo "      - $(basename "$host_config_file")"
+                done
+            else
+                echo "    (Not used by any hosts)"
+            fi
+        done
+        ;;
+
+    create)
+        [ -z "$TEMPLATE_NAME" ] && err "No template name provided."
+        if [ -d "$TEMPLATE_PATH" ]; then
+            err "Template '$TEMPLATE_NAME' already exists at $TEMPLATE_PATH"
+        fi
+        
+        mkdir -p -m 700 "$TEMPLATE_PATH"
+        touch "$TEMPLATE_PATH/config"
+        chmod 600 "$TEMPLATE_PATH/config"
+        echo "Created new template (with config): $TEMPLATE_NAME"
+        ;;
+
+    remove)
+        [ -z "$TEMPLATE_NAME" ] && err "No template name provided."
+        if [ ! -d "$TEMPLATE_PATH" ]; then
+            err "Template '$TEMPLATE_NAME' not found."
+        fi
+        
+        TEMPLATE_CONFIG_PATH="$TEMPLATE_PATH/config"
+        
+        # Find all host configs that link to this template
+        HOSTS_TO_REMOVE=$(grep -l "Include $TEMPLATE_CONFIG_PATH" "$CONFIG_DIR"/* 2>/dev/null || true)
+
+        echo "Removing template '$TEMPLATE_NAME'."
+        if [ -n "$HOSTS_TO_REMOVE" ]; then
+            echo "This will also remove the following host configurations:"
+            for host_config_file in $HOSTS_TO_REMOVE; do
+                echo "  - $(basename "$host_config_file")"
+            done
+        fi
+        
+        read -p "Are you sure? (y/N) " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "Aborted."
+            exit 0
+        fi
+        
+        # 1. Remove linked host configs
+        if [ -n "$HOSTS_TO_REMOVE" ]; then
+            for host_config_file in $HOSTS_TO_REMOVE; do
+                rm "$host_config_file"
+                echo "Removed host config: $(basename "$host_config_file")"
+            done
+        fi
+        
+        # 2. Remove the template directory
+        rm -rf "$TEMPLATE_PATH"
+        echo "Removed template directory: $TEMPLATE_PATH"
+        ;;
+
+    generate-keys)
+        [ -z "$TEMPLATE_NAME" ] && err "No template name provided."
+        if [ ! -d "$TEMPLATE_PATH" ]; then
+            err "Template '$TEMPLATE_NAME' not found. Create it first."
+        fi
+        
+        echo "Generating keys for template '$TEMPLATE_NAME'..."
+        
+        ssh-keygen -t ed25519 -f "$TEMPLATE_PATH/id_ed25519" \
+            -N "" -C "$TEMPLATE_NAME-template-key"
+        ssh-keygen -t ecdsa -f "$TEMPLATE_PATH/id_ecdsa" \
+            -N "" -C "$TEMPLATE_NAME-template-key"
+        ssh-keygen -t rsa -b 4096 -f "$TEMPLATE_PATH/id_rsa" \
+            -N "" -C "$TEMPLATE_NAME-template-key"
+            
+        chmod 600 "$TEMPLATE_PATH"/id_*
+        chmod 644 "$TEMPLATE_PATH"/id_*.pub
+        
+        echo "All keys generated for template '$TEMPLATE_NAME'."
+        ls -l "$TEMPLATE_PATH"
+        ;;
+
+    edit-config)
+        [ -z "$TEMPLATE_NAME" ] && err "No template name provided."
+        if [ ! -d "$TEMPLATE_PATH" ]; then
+            err "Template '$TEMPLATE_NAME' not found. Create it first."
+        fi
+        
+        TEMPLATE_CONFIG_FILE="$TEMPLATE_PATH/config"
+        touch "$TEMPLATE_CONFIG_FILE"
+        chmod 600 "$TEMPLATE_CONFIG_FILE"
+        
+        echo "Opening $TEMPLATE_CONFIG_FILE in ${EDITOR:-nano}..."
+        ${EDITOR:-nano} "$TEMPLATE_CONFIG_FILE"
+        echo "Template config updated."
+        ;;
+
+    *)
+        usage
+        ;;
+esac
