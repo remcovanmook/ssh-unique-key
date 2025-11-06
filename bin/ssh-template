@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+# Get the directory this script is running from
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
@@ -19,7 +20,7 @@ usage() {
 
 [ "$#" -lt 1 ] && usage
 COMMAND="$1"
-TEMPLATE_NAME="${2:-}" # Set to empty string if not provided
+TEMPLATE_NAME="${2:-}"
 TEMPLATE_PATH="$TEMPLATE_DIR/$TEMPLATE_NAME"
 
 # --- Main Logic ---
@@ -34,14 +35,19 @@ case "$COMMAND" in
         for template in $(ls -1 "$TEMPLATE_DIR"); do
             echo "  - $template"
             TEMPLATE_CONFIG_PATH="$TEMPLATE_DIR/$template/config"
+            ABS_TEMPLATE_CONFIG_PATH=$(cd "$(dirname "$TEMPLATE_CONFIG_PATH")" && pwd)/$(basename "$TEMPLATE_CONFIG_PATH")
             
             # Find all host configs that include this template's config file
-            HOSTS=$(grep -l "Include $TEMPLATE_CONFIG_PATH" "$CONFIG_DIR"/* 2>/dev/null || true)
+            HOSTS=$(grep -l "Include $ABS_TEMPLATE_CONFIG_PATH" "$UUID_DIR"/*/config 2>/dev/null || true)
             
             if [ -n "$HOSTS" ]; then
                 echo "    Hosts using this template:"
                 for host_config_file in $HOSTS; do
-                    echo "      - $(basename "$host_config_file")"
+                    # Get UUID from path
+                    UUID=$(basename "$(dirname "$host_config_file")")
+                    # Find hostnames pointing to this UUID
+                    HOSTNAMES=$(find "$HOST_DIR" -type l -lname "*/$UUID" -exec basename {} \; 2>/dev/null | tr '\n' ' ')
+                    echo "      - $UUID ($HOSTNAMES)"
                 done
             else
                 echo "    (Not used by any hosts)"
@@ -68,15 +74,16 @@ case "$COMMAND" in
         fi
         
         TEMPLATE_CONFIG_PATH="$TEMPLATE_PATH/config"
-        
+        ABS_TEMPLATE_CONFIG_PATH=$(cd "$(dirname "$TEMPLATE_CONFIG_PATH")" && pwd)/$(basename "$TEMPLATE_CONFIG_PATH")
+
         # Find all host configs that link to this template
-        HOSTS_TO_REMOVE=$(grep -l "Include $TEMPLATE_CONFIG_PATH" "$CONFIG_DIR"/* 2>/dev/null || true)
+        HOSTS_TO_CLEAN=$(grep -l "Include $ABS_TEMPLATE_CONFIG_PATH" "$UUID_DIR"/*/config 2>/dev/null || true)
 
         echo "Removing template '$TEMPLATE_NAME'."
-        if [ -n "$HOSTS_TO_REMOVE" ]; then
-            echo "This will also remove the following host configurations:"
-            for host_config_file in $HOSTS_TO_REMOVE; do
-                echo "  - $(basename "$host_config_file")"
+        if [ -n "$HOSTS_TO_CLEAN" ]; then
+            echo "This will remove the 'Include' line from the following host configs:"
+            for host_config_file in $HOSTS_TO_CLEAN; do
+                echo "  - $(basename "$(dirname "$host_config_file")")"
             done
         fi
         
@@ -86,11 +93,12 @@ case "$COMMAND" in
             exit 0
         fi
         
-        # 1. Remove linked host configs
-        if [ -n "$HOSTS_TO_REMOVE" ]; then
-            for host_config_file in $HOSTS_TO_REMOVE; do
-                rm "$host_config_file"
-                echo "Removed host config: $(basename "$host_config_file")"
+        # 1. Remove 'Include' line from host configs
+        if [ -n "$HOSTS_TO_CLEAN" ]; then
+            for host_config_file in $HOSTS_TO_CLEAN; do
+                sed -i.bak "/Include $ABS_TEMPLATE_CONFIG_PATH/d" "$host_config_file"
+                rm -f "$host_config_file.bak"
+                echo "Cleaned config: $(basename "$(dirname "$host_config_file")")"
             done
         fi
         

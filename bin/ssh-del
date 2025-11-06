@@ -1,41 +1,113 @@
 #!/bin/bash
 set -e
 
+# Get the directory this script is running from
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
 
-[ "$#" -ne 1 ] && err "Usage: ssh-del <hostname>"
-HOST_NAME="$1"
+[ "$#" -ne 1 ] && err "Usage: ssh-del [user@]hostname"
 
-CONFIG_SNIPPET_FILE="$CONFIG_DIR/$HOST_NAME"
-[ ! -f "$CONFIG_SNIPPET_FILE" ] && err "No config found for '$HOST_NAME'."
+# --- Get User and Host ---
+USER_HOST_ARG="$1"
+HOST_NAME=$(get_host_from_arg "$USER_HOST_ARG")
+USER_NAME=$(get_user_from_arg "$USER_HOST_ARG")
 
-# Get path and UUID *from the snippet* before deleting it
-CANONICAL_PATH=$(get_uuid_path_from_host "$HOST_NAME")
-[ -z "$CANONICAL_PATH" ] && exit 1
-HOST_UUID=$(basename "$CANONICAL_PATH")
+# --- Find Host Identity ---
+echo "Scanning $HOST_NAME to find its identity..."
+RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME" 2>/dev/null)
+if [ -z "$RAW_SCAN_DATA" ]; then
+    # Fallback: try to find via by-host link if host is offline
+    HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
+    if [ -L "$HOST_SYMLINK_PATH" ]; {
+        echo "Host unreachable. Found existing symlink."
+        CANONICAL_PATH=$(readlink -f "$HOST_SYMLINK_PATH")
+        HOST_UUID=$(basename "$CANONICAL_PATH")
+    } else {
+        err "Host $HOST_NAME unreachable and no by-host link found."
+    } fi
+else
+    SCAN_DATA_SORTED=$(echo "$RAW_SCAN_DATA" | sort)
+    HOST_UUID=$(get_host_uuid_from_scan_data "$SCAN_DATA_SORTED")
+    CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
+fi
 
-# 1. Remove the config snippet
-rm "$CONFIG_SNIPPET_FILE"
-echo "Removed config: $HOST_NAME"
+[ ! -d "$CANONICAL_PATH" ] && err "No identity found for host $HOST_NAME (UUID: $HOST_UUID)."
 
-# 2. Check for other snippets using this UUID
-OTHER_ALIASES=$(grep -l "UUID: $HOST_UUID" "$CONFIG_DIR"/* 2>/dev/null || true)
+# --- Check for User and Confirm Deletion ---
+USER_KEY_DIR="$CANONICAL_PATH/$USER_NAME"
+if [ ! -d "$USER_KEY_DIR" ]; then
+    err "No keys found for '$USER_NAME' on host '$HOST_NAME'."
+fi
 
-if [ -z "$OTHER_ALIASES" ]; then
-    echo "This was the last config for host $HOST_UUID."
-    read -p "Delete all keys, configs, and 'by-key' link? (y/N) " confirm
+read -p "Really delete all keys for $USER_NAME@$HOST_NAME? (y/N) " confirm_user
+if [[ "$confirm_user" != "y" && "$confirm_user" != "Y" ]]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# --- Delete User Directory ---
+rm -rf "$USER_KEY_DIR"
+echo "Removed keys for $USER_NAME@$HOST_NAME."
+
+# --- Check for Other Users ---
+# Find any other directories (user keys)
+OTHER_USER_DIRS=$(find "$CANONICAL_PATH" -mindepth 1 -maxdepth 1 -type d)
+
+if [ -n "$OTHER_USER_DIRS" ]; then
+    echo "Other users still have keys for this host. Host identity and symlinks remain."
+    exit 0
+fi
+
+# --- This was the last user. Proceed with full host cleanup. ---
+echo "This was the last user for this host."
+echo "Cleaning up all host symlinks..."
+
+# --- Remove by-host symlink ---
+HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
+if [ -L "$HOST_SYMLINK_PATH" ]; then
+    rm "$HOST_SYMLINK_PATH"
+    echo "Removed host symlink: $HOST_SYMLINK_PATH"
+fi
+
+# --- Remove ALL by-key symlinks ---
+STORED_KEYS_FILE="$CANONICAL_PATH/known_host_keys"
+if [ -f "$STORED_KEYS_FILE" ]; then
+    echo "Removing all by-key symlinks..."
+    # Read the stored keys (which are already sorted)
+    cat "$STORED_KEYS_FILE" | while read -r line; do
+        [ -z "$line" ] && continue
+        BASE64_KEY=$(echo "$line" | awk '{print $3}')
+        [ -z "$BASE64_KEY" ] && continue
+        
+        KEY_SYMLINK_PATH="$KEY_DIR/$BASE64_KEY"
+        if [ -L "$KEY_SYMLINK_PATH" ]; then
+            rm "$KEY_SYMLINK_PATH"
+            echo "  -> Removed $KEY_SYMLINK_PATH"
+        fi
+    done
+else
+    warn "Could not find $STORED_KEYS_FILE. Cannot remove by-key links."
+fi
+
+# --- Check for other aliases ---
+# Find other symlinks in by-host/ *or* by-key/
+OTHER_HOST_ALIASES=$(find "$HOST_DIR" -type l -lname "*/$HOST_UUID" 2>/dev/null || true)
+OTHER_KEY_ALIASES=$(find "$KEY_DIR" -type l -lname "*/$HOST_UUID" 2>/dev/null || true)
+
+if [ -z "$OTHER_HOST_ALIASES" ] && [ -z "$OTHER_KEY_ALIASES" ]; then
+    echo "This was the last alias for host $HOST_UUID."
+    read -p "Delete all remaining host data (config, keyscan)? (y/N) " confirm_host
     
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        rm "$KEY_DIR/$HOST_UUID"
+    if [[ "$confirm_host" == "y" || "$confirm_host" == "Y" ]]; then
         rm -rf "$CANONICAL_PATH"
         echo "Successfully deleted all data for $HOST_UUID."
     else
         echo "Aborted. Host identity $CANONICAL_PATH remains."
     fi
 else
-    echo "Other host configs still point to this identity:"
-    echo "$OTHER_ALIASES" | xargs -n 1 basename
+    echo "Other aliases still point to this identity:"
+    [ -n "$OTHER_HOST_ALIASES" ] && echo "$OTHER_HOST_ALIASES" | xargs -n 1 basename
+    [ -n "$OTHER_KEY_ALIASES" ] && echo "$OTHER_KEY_ALIASES"
     echo "Identity $CANONICAL_PATH was not removed."
 fi

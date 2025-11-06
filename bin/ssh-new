@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+# Get the directory this script is running from
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
@@ -21,138 +22,125 @@ USER_NAME=$(get_user_from_arg "$USER_HOST_ARG")
 # --- Host Key Scan and Verification ---
 echo "Scanning host $HOST_NAME..."
 RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME")
-HOST_UUID=$(get_host_uuid_from_scan_data "$RAW_SCAN_DATA")
+# Create the canonical, sorted version for storage and comparison
+SCAN_DATA_SORTED=$(echo "$RAW_SCAN_DATA" | sort)
 
-if [ -L "$KEY_DIR/$HOST_UUID" ]; then
-    echo "Host key hash is known. Verifying full keyset..."
-    CANONICAL_PATH=$(cd "$KEY_DIR" && readlink -f "$HOST_UUID")
+HOST_UUID=$(get_host_uuid_from_scan_data "$SCAN_DATA_SORTED")
+CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
+
+
+if [ -d "$CANONICAL_PATH" ]; then
+    echo "Host identity already exists. Verifying keys..."
     STORED_KEYS_FILE="$CANONICAL_PATH/known_host_keys"
-    if [ ! -f "$STORED_KEYS_FILE" ]; then
-         echo "Warning: No stored keys found for known host. Storing now."
-         echo "$RAW_SCAN_DATA" > "$STORED_KEYS_FILE"
-         chmod 644 "$STORED_KEYS_FILE"
+    
+    # Compare sorted new scan with the (already sorted) stored file
+    if ! diff -q <(echo "$SCAN_DATA_SORTED") "$STORED_KEYS_FILE" >/dev/null; then
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "  @       WARNING: HOST KEY CHANGED!       @" >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        err "Host key verification failed."
     else
-        if ! diff -q <(echo "$RAW_SCAN_DATA") "$STORED_KEYS_FILE" >/dev/null; then
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-            echo "  @       WARNING: HOST KEY CHANGED!       @" >&2
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-            err "Host key verification failed."
-        else
-            echo "Host keys verified successfully."
-        fi
+        echo "Host keys verified successfully."
     fi
 else
     echo "New host key detected. Creating new identity."
-    CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
     mkdir -p -m 700 "$CANONICAL_PATH"
-    ln -s "../host-uuid/$HOST_UUID" "$KEY_DIR/$HOST_UUID"
-    echo "$RAW_SCAN_DATA" > "$CANONICAL_PATH/known_host_keys"
+    # Store the sorted, canonical data
+    echo "$SCAN_DATA_SORTED" > "$CANONICAL_PATH/known_host_keys"
     chmod 644 "$CANONICAL_PATH/known_host_keys"
     echo "Stored host keys in $CANONICAL_PATH/known_host_keys"
-    log_host_key_change "$HOST_NAME" "" "$HOST_UUID"
 fi
 
 # --- Create User Key (if needed) ---
 USER_KEY_DIR="$CANONICAL_PATH/$USER_NAME"
 mkdir -p -m 700 "$USER_KEY_DIR"
+KEY_FILE="$USER_KEY_DIR/identity"
+KEY_FILE_PUB="$USER_KEY_DIR/identity.pub"
+TEMPLATE_CONFIG_PATH=""
 KEY_GEN_TYPE=""
-TEMPLATE_CONFIG_PATH="" 
 
-if [ -n "$TEMPLATE_NAME" ]; then
-    # --- TEMPLATE LOGIC ---
-    PRIORITY_LIST=("ed25519" "ecdsa" "rsa")
-    TEMPLATE_PATH_BASE="$TEMPLATE_DIR/$TEMPLATE_NAME"
-    
-    if [ ! -d "$TEMPLATE_PATH_BASE" ]; then
-        err "Template '$TEMPLATE_NAME' not found at $TEMPLATE_PATH_BASE"
-    fi
-    
-    if [ -f "$TEMPLATE_PATH_BASE/config" ]; then
+if [ ! -f "$KEY_FILE" ]; then
+    if [ -n "$TEMPLATE_NAME" ]; {
+        # --- TEMPLATE LOGIC ---
+        PRIORITY_LIST=("ed25519" "ecdsa" "rsa")
+        TEMPLATE_PATH_BASE="$TEMPLATE_DIR/$TEMPLATE_NAME"
+        [ ! -d "$TEMPLATE_PATH_BASE" ] && err "Template '$TEMPLATE_NAME' not found."
+        
         TEMPLATE_CONFIG_PATH="$TEMPLATE_PATH_BASE/config"
-    fi
 
-    echo "Checking template '$TEMPLATE_NAME' for best compatible key..."
-    for key_type in "${PRIORITY_LIST[@]}"; do
-        if echo "$RAW_SCAN_DATA" | grep -q "$key_type"; then
-            if [ -f "$TEMPLATE_PATH_BASE/id_$key_type" ]; then
-                KEY_GEN_TYPE="$key_type"
-                break
+        for key_type in "${PRIORITY_LIST[@]}"; do
+            if echo "$SCAN_DATA_SORTED" | grep -q "$key_type"; then
+                if [ -f "$TEMPLATE_PATH_BASE/id_$key_type" ]; { KEY_GEN_TYPE="$key_type"; break; } fi
             fi
-        fi
-    done
+        done
+        [ -z "$KEY_GEN_TYPE" ] && err "No compatible keys found in template '$TEMPLATE_NAME'."
 
-    if [ -z "$KEY_GEN_TYPE" ]; then
-        err "No compatible keys found between host and template '$TEMPLATE_NAME'."
-    fi
-
-    echo "Linking best common key: $KEY_GEN_TYPE"
-    PRIVATE_KEY_FILE="$USER_KEY_DIR/id_$KEY_GEN_TYPE"
-    TEMPLATE_PATH_BASE_REL="../../templates/$TEMPLATE_NAME"
-
-    if [ ! -f "$PRIVATE_KEY_FILE" ]; then
+        echo "Linking best common key ($KEY_GEN_TYPE) as 'identity'..."
+        TEMPLATE_KEY_REL_PATH="../../templates/$TEMPLATE_NAME/id_$KEY_GEN_TYPE"
         (cd "$USER_KEY_DIR" && \
-         ln -s "$TEMPLATE_PATH_BASE_REL/id_$KEY_GEN_TYPE" "id_$KEY_GEN_TYPE" && \
-         ln -s "$TEMPLATE_PATH_BASE_REL/id_$KEY_GEN_TYPE.pub" "id_$KEY_GEN_TYPE.pub")
-        log_key_install "$KEY_GEN_TYPE" "$USER_HOST_ARG" "$PRIVATE_KEY_FILE" "$TEMPLATE_NAME"
-    fi
-else
-    # --- NEW KEY GENERATION LOGIC ---
-    KEY_GEN_TYPE=$(get_best_key_type_from_scan_data "$RAW_SCAN_DATA")
-    echo "Server's best user key type: $KEY_GEN_TYPE"
-    PRIVATE_KEY_FILE="$USER_KEY_DIR/id_$KEY_GEN_TYPE"
-
-    if [ ! -f "$PRIVATE_KEY_FILE" ]; then
-        echo "Generating new $KEY_GEN_TYPE key..."
+         ln -s "$TEMPLATE_KEY_REL_PATH" "identity" && \
+         ln -s "$TEMPLATE_KEY_REL_PATH.pub" "identity.pub")
+    } else {
+        # --- NEW KEY GENERATION LOGIC ---
+        KEY_GEN_TYPE=$(get_best_key_type_from_scan_data "$SCAN_DATA_SORTED")
+        echo "Generating new $KEY_GEN_TYPE key as 'identity'..."
+        
         declare -a KEYGEN_ARGS
         if [ "$KEY_GEN_TYPE" == "rsa" ]; then
             KEYGEN_ARGS=("-b" "4096")
         fi
-        ssh-keygen -t "$KEY_GEN_TYPE" -f "$PRIVATE_KEY_FILE" \
+        
+        ssh-keygen -t "$KEY_GEN_TYPE" -f "$KEY_FILE" \
             -N "" -C "$USER_NAME@$HOST_NAME" "${KEYGEN_ARGS[@]}"
-        chmod 600 "$PRIVATE_KEY_FILE"
-        chmod 644 "$PRIVATE_KEY_FILE.pub"
+        chmod 600 "$KEY_FILE"; chmod 644 "$KEY_FILE_PUB"
+    } fi
+fi
+
+# --- Create Host Config File (with template inheritance) ---
+HOST_CONFIG_FILE="$CANONICAL_PATH/config"
+if [ ! -f "$HOST_CONFIG_FILE" ]; then
+    touch "$HOST_CONFIG_FILE"
+    chmod 600 "$HOST_CONFIG_FILE"
+    
+    if [ -n "$TEMPLATE_CONFIG_PATH" ] && [ -f "$TEMPLATE_CONFIG_PATH" ]; then
+        # Get absolute path for the Include directive
+        ABS_TEMPLATE_CONFIG_PATH=$(cd "$(dirname "$TEMPLATE_CONFIG_PATH")" && pwd)/$(basename "$TEMPLATE_CONFIG_PATH")
+        echo "# Inherits from template: $TEMPLATE_NAME" > "$HOST_CONFIG_FILE"
+        echo "Include $ABS_TEMPLATE_CONFIG_PATH" >> "$HOST_CONFIG_FILE"
+        echo "" >> "$HOST_CONFIG_FILE"
+        echo "# Add host-specific overrides below" >> "$HOST_CONFIG_FILE"
     fi
 fi
 
-# --- Ensure host-specific config file exists ---
-HOST_CONFIG_FILE="$CANONICAL_PATH/config"
-if [ ! -f "$HOST_CONFIG_FILE" ]; then
-    echo "Creating empty host-specific config: $HOST_CONFIG_FILE"
-    touch "$HOST_CONFIG_FILE"
-    chmod 600 "$HOST_CONFIG_FILE"
+# --- Copy Key to Host (This populates known_hosts) ---
+echo "Copying public key to $USER_HOST_ARG (password may be required)..."
+ssh-copy-id -i "$KEY_FILE_PUB" "$USER_HOST_ARG"
+
+# --- Create by-host Symlink ---
+HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
+if [ ! -L "$HOST_SYMLINK_PATH" ]; then
+    echo "Creating by-host symlink..."
+    ln -s "$CANONICAL_PATH" "$HOST_SYMLINK_PATH"
 fi
 
-# --- Config Snippet Generation ---
-CONFIG_SNIPPET_FILE="$CONFIG_DIR/$HOST_NAME"
-echo "Creating config snippet: $CONFIG_SNIPPET_FILE"
-touch "$CONFIG_SNIPPET_FILE"
-chmod 600 "$CONFIG_SNIPPET_FILE"
-
-# Start writing the config
-cat > "$CONFIG_SNIPPET_FILE" << EOF
-# Auto-generated by ssh-new for host: $HOST_NAME
-# UUID: $HOST_UUID
-Host $HOST_NAME
-    # Use %r (remote user) to dynamically pick the user's key
-    IdentityFile $CANONICAL_PATH/%r/id_$KEY_GEN_TYPE
+# --- Create ALL by-key Symlinks ---
+echo "Creating by-key symlinks for all host keys..."
+# Use the *unsorted* raw data to get the base64 keys
+echo "$RAW_SCAN_DATA" | while read -r line; do
+    [ -z "$line" ] && continue
+    # The 3rd field is the base64 key
+    BASE64_KEY=$(echo "$line" | awk '{print $3}')
+    [ -z "$BASE64_KEY" ] && continue
     
-EOF
-
-# Conditionally add the template's config file FIRST
-if [ -n "$TEMPLATE_CONFIG_PATH" ]; then
-    echo "    # Inherit options from template: $TEMPLATE_NAME" >> "$CONFIG_SNIPPET_FILE"
-    echo "    Include $TEMPLATE_CONFIG_PATH" >> "$CONFIG_SNIPPET_FILE"
-fi
-
-# Add the host-specific config file LAST (so it overrides)
-cat >> "$CONFIG_SNIPPET_FILE" << EOF
+    KEY_SYMLINK_PATH="$KEY_DIR/$BASE64_KEY"
+    KEY_SYMLINK_DIR=$(dirname "$KEY_SYMLINK_PATH")
     
-    # Include host-specific custom options (overrides template)
-    Include $CANONICAL_PATH/config
-EOF
+    mkdir -p -m 700 "$KEY_SYMLINK_DIR"
+    # Symlink points to the host-uuid *directory*
+    ln -sf "$CANONICAL_PATH" "$KEY_SYMLINK_PATH"
+    echo "  -> $KEY_SYMLINK_PATH"
+done
 
-# --- Copy Key to Host ---
-echo "Copying public key to $USER_HOST_ARG..."
-ssh-copy-id -i "$PRIVATE_KEY_FILE.pub" "$USER_HOST_ARG"
-
-echo "Done. Run: ssh $USER_HOST_ARG"
+# --- Connect to host ---
+echo "Done. Connecting to $USER_HOST_ARG..."
+exec ssh "$USER_HOST_ARG"
