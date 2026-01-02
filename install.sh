@@ -84,13 +84,13 @@ setup_config() {
     
     local CONFIG_OK=1
     
-    if [ "$HAS_K_SUPPORT" == "true" ]; {
+    if [ "$HAS_K_SUPPORT" == "true" ]; then
         # Check for all four lines
         if ! grep -qF "$INCLUDE_LINE_K" "$CONFIG_FILE"; then CONFIG_OK=0; fi
         if ! grep -qF "$IDENTITY_LINE_K" "$CONFIG_FILE"; then CONFIG_OK=0; fi
         if ! grep -qF "$INCLUDE_LINE_H" "$CONFIG_FILE"; then CONFIG_OK=0; fi
         if ! grep -qF "$IDENTITY_LINE_H" "$CONFIG_FILE"; then CONFIG_OK=0; fi
-    } else {
+    else
         # Check for only the host lines
         if ! grep -qF "$INCLUDE_LINE_H" "$CONFIG_FILE"; then CONFIG_OK=0; fi
         if ! grep -qF "$IDENTITY_LINE_H" "$CONFIG_FILE"; then CONFIG_OK=0; fi
@@ -98,7 +98,7 @@ setup_config() {
         if grep -qF "$INCLUDE_LINE_K" "$CONFIG_FILE"; then
             warn "Your config contains the %K lookup, but your SSH client doesn't support it."
         fi
-    } fi
+    fi
     
     if [ "$CONFIG_OK" -eq 1 ]; then
         msg "SSH config is already set up. Skipping."

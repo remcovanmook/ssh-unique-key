@@ -19,13 +19,13 @@ RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME" 2>/dev/null)
 if [ -z "$RAW_SCAN_DATA" ]; then
     # Fallback: try to find via by-host link if host is offline
     HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
-    if [ -L "$HOST_SYMLINK_PATH" ]; {
+    if [ -L "$HOST_SYMLINK_PATH" ]; then
         echo "Host unreachable. Found existing symlink."
         CANONICAL_PATH=$(readlink -f "$HOST_SYMLINK_PATH")
         HOST_UUID=$(basename "$CANONICAL_PATH")
-    } else {
+    else
         err "Host $HOST_NAME unreachable and no by-host link found."
-    } fi
+    fi
 else
     SCAN_DATA_SORTED=$(echo "$RAW_SCAN_DATA" | sort)
     HOST_UUID=$(get_host_uuid_from_scan_data "$SCAN_DATA_SORTED")
