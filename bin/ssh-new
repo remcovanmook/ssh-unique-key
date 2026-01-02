@@ -60,7 +60,7 @@ TEMPLATE_CONFIG_PATH=""
 KEY_GEN_TYPE=""
 
 if [ ! -f "$KEY_FILE" ]; then
-    if [ -n "$TEMPLATE_NAME" ]; {
+    if [ -n "$TEMPLATE_NAME" ]; then
         # --- TEMPLATE LOGIC ---
         PRIORITY_LIST=("ed25519" "ecdsa" "rsa")
         TEMPLATE_PATH_BASE="$TEMPLATE_DIR/$TEMPLATE_NAME"
@@ -70,7 +70,7 @@ if [ ! -f "$KEY_FILE" ]; then
 
         for key_type in "${PRIORITY_LIST[@]}"; do
             if echo "$SCAN_DATA_SORTED" | grep -q "$key_type"; then
-                if [ -f "$TEMPLATE_PATH_BASE/id_$key_type" ]; { KEY_GEN_TYPE="$key_type"; break; } fi
+                if [ -f "$TEMPLATE_PATH_BASE/id_$key_type" ]; then KEY_GEN_TYPE="$key_type"; break; fi
             fi
         done
         [ -z "$KEY_GEN_TYPE" ] && err "No compatible keys found in template '$TEMPLATE_NAME'."
@@ -80,7 +80,7 @@ if [ ! -f "$KEY_FILE" ]; then
         (cd "$USER_KEY_DIR" && \
          ln -s "$TEMPLATE_KEY_REL_PATH" "identity" && \
          ln -s "$TEMPLATE_KEY_REL_PATH.pub" "identity.pub")
-    } else {
+    else
         # --- NEW KEY GENERATION LOGIC ---
         KEY_GEN_TYPE=$(get_best_key_type_from_scan_data "$SCAN_DATA_SORTED")
         echo "Generating new $KEY_GEN_TYPE key as 'identity'..."
@@ -93,7 +93,7 @@ if [ ! -f "$KEY_FILE" ]; then
         ssh-keygen -t "$KEY_GEN_TYPE" -f "$KEY_FILE" \
             -N "" -C "$USER_NAME@$HOST_NAME" "${KEYGEN_ARGS[@]}"
         chmod 600 "$KEY_FILE"; chmod 644 "$KEY_FILE_PUB"
-    } fi
+    fi
 fi
 
 # --- Create Host Config File (with template inheritance) ---
