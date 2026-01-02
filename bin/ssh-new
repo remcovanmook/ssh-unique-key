@@ -44,6 +44,9 @@ HOST_UUID=$(get_host_uuid_from_scan_data "$SCAN_DATA_SORTED")
 CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
 
 
+
+EXISTING_HOST_IDENTITY=false
+
 if [ -d "$CANONICAL_PATH" ]; then
     log "Host identity already exists. Verifying keys..."
     EXISTING_HOST_IDENTITY=true
