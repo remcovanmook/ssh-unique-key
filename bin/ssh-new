@@ -8,19 +8,34 @@ source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
 ensure_base_dirs
 
 # --- Argument Parsing ---
+VERBOSE=false
 TEMPLATE_NAME=""
-if [ "$1" == "--template" ]; then
-    TEMPLATE_NAME="$2"
-    shift 2
-fi
-[ "$#" -ne 1 ] && err "Usage: ssh-new [--template <name>] <user@host>"
+POSITIONAL_ARGS=()
 
-USER_HOST_ARG="$1"
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -v|--verbose) VERBOSE=true; shift ;;
+        --template) TEMPLATE_NAME="$2"; shift 2 ;;
+        *) POSITIONAL_ARGS+=("$1"); shift ;;
+    esac
+done
+
+if [ ${#POSITIONAL_ARGS[@]} -ne 1 ]; then
+    err "Usage: ssh-new [-v] [--template <name>] <user@host>"
+fi
+USER_HOST_ARG="${POSITIONAL_ARGS[0]}"
+
+log() {
+    if [ "$VERBOSE" = true ]; then
+        echo "$@"
+    fi
+}
+
 HOST_NAME=$(get_host_from_arg "$USER_HOST_ARG")
 USER_NAME=$(get_user_from_arg "$USER_HOST_ARG")
 
 # --- Host Key Scan and Verification ---
-echo "Scanning host $HOST_NAME..."
+log "Scanning host $HOST_NAME..."
 RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME")
 # Create the canonical, sorted version for storage and comparison
 SCAN_DATA_SORTED=$(echo "$RAW_SCAN_DATA" | sort)
@@ -30,25 +45,34 @@ CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
 
 
 if [ -d "$CANONICAL_PATH" ]; then
-    echo "Host identity already exists. Verifying keys..."
+    log "Host identity already exists. Verifying keys..."
+    EXISTING_HOST_IDENTITY=true
     STORED_KEYS_FILE="$CANONICAL_PATH/known_host_keys"
     
     # Compare sorted new scan with the (already sorted) stored file
-    if ! diff -q <(echo "$SCAN_DATA_SORTED") "$STORED_KEYS_FILE" >/dev/null; then
+    # Compare sorted new scan with the stored file, IGNORING the hostname field
+    # (fields 2 and 3 are algorithm and key)
+    NEW_KEYS_CONTENT=$(echo "$SCAN_DATA_SORTED" | awk '{print $2, $3}' | sort)
+    STORED_KEYS_CONTENT=$(cat "$STORED_KEYS_FILE" | awk '{print $2, $3}' | sort)
+    
+    if ! diff -q <(echo "$NEW_KEYS_CONTENT") <(echo "$STORED_KEYS_CONTENT") >/dev/null; then
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         echo "  @       WARNING: HOST KEY CHANGED!       @" >&2
         echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
         err "Host key verification failed."
     else
-        echo "Host keys verified successfully."
+        log "Host keys verified successfully."
     fi
 else
-    echo "New host key detected. Creating new identity."
+    # Only echo this important state change if verbose, OR maybe meaningful enough to keep? 
+    # User requested reduced verbosity. Let's log it.
+    log "New host key detected. Creating new identity."
     mkdir -p -m 700 "$CANONICAL_PATH"
     # Store the sorted, canonical data
     echo "$SCAN_DATA_SORTED" > "$CANONICAL_PATH/known_host_keys"
     chmod 644 "$CANONICAL_PATH/known_host_keys"
-    echo "Stored host keys in $CANONICAL_PATH/known_host_keys"
+
+    log "Stored host keys in $CANONICAL_PATH/known_host_keys"
 fi
 
 # --- Create User Key (if needed) ---
@@ -75,7 +99,7 @@ if [ ! -f "$KEY_FILE" ]; then
         done
         [ -z "$KEY_GEN_TYPE" ] && err "No compatible keys found in template '$TEMPLATE_NAME'."
 
-        echo "Linking best common key ($KEY_GEN_TYPE) as 'identity'..."
+        log "Linking best common key ($KEY_GEN_TYPE) as 'identity'..."
         TEMPLATE_KEY_REL_PATH="../../templates/$TEMPLATE_NAME/id_$KEY_GEN_TYPE"
         (cd "$USER_KEY_DIR" && \
          ln -s "$TEMPLATE_KEY_REL_PATH" "identity" && \
@@ -83,7 +107,7 @@ if [ ! -f "$KEY_FILE" ]; then
     else
         # --- NEW KEY GENERATION LOGIC ---
         KEY_GEN_TYPE=$(get_best_key_type_from_scan_data "$SCAN_DATA_SORTED")
-        echo "Generating new $KEY_GEN_TYPE key as 'identity'..."
+        log "Generating new $KEY_GEN_TYPE key as 'identity'..."
         
         declare -a KEYGEN_ARGS
         if [ "$KEY_GEN_TYPE" == "rsa" ]; then
@@ -113,18 +137,22 @@ if [ ! -f "$HOST_CONFIG_FILE" ]; then
 fi
 
 # --- Copy Key to Host (This populates known_hosts) ---
-echo "Copying public key to $USER_HOST_ARG (password may be required)..."
-ssh-copy-id -i "$KEY_FILE_PUB" "$USER_HOST_ARG"
+# Only run ssh-copy-id if we didn't just verify an existing identity
+# (Assume existing identity means we've been here before)
+if [ "$EXISTING_HOST_IDENTITY" = false ]; then
+    log "Copying public key to $USER_HOST_ARG (password may be required)..."
+    ssh-copy-id -i "$KEY_FILE_PUB" "$USER_HOST_ARG"
+fi
 
 # --- Create by-host Symlink ---
 HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
 if [ ! -L "$HOST_SYMLINK_PATH" ]; then
-    echo "Creating by-host symlink..."
+    log "Creating by-host symlink..."
     ln -s "$CANONICAL_PATH" "$HOST_SYMLINK_PATH"
 fi
 
 # --- Create ALL by-key Symlinks ---
-echo "Creating by-key symlinks for all host keys..."
+log "Creating by-key symlinks for all host keys..."
 # Use the *unsorted* raw data to get the base64 keys
 echo "$RAW_SCAN_DATA" | while read -r line; do
     [ -z "$line" ] && continue
@@ -138,9 +166,9 @@ echo "$RAW_SCAN_DATA" | while read -r line; do
     mkdir -p -m 700 "$KEY_SYMLINK_DIR"
     # Symlink points to the host-uuid *directory*
     ln -sf "$CANONICAL_PATH" "$KEY_SYMLINK_PATH"
-    echo "  -> $KEY_SYMLINK_PATH"
+    log "  -> $KEY_SYMLINK_PATH"
 done
 
 # --- Connect to host ---
-echo "Done. Connecting to $USER_HOST_ARG..."
+log "Done. Connecting to $USER_HOST_ARG..."
 exec ssh "$USER_HOST_ARG"
