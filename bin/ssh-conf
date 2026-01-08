@@ -1,63 +1,67 @@
 #!/bin/bash
 set -e
-
-# Get the directory this script is running from
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
 
-# --- Main Logic ---
-if [ "$#" -lt 1 ]; then
-    echo "Usage:"
-    echo "  ssh-conf <host>                      # View config"
-    echo "  ssh-conf <host> <Option> <Value>     # Add/Update config (overrides template)"
-    echo "  ssh-conf <host> --remove <Option>    # Remove config"
-    err "Invalid arguments."
-fi
+usage() {
+    echo "Usage: ssh-conf <host> [Option] [Value] | --remove <Option>"
+    echo "  -V, --verbose       Enable verbose output"
+    echo "  -h, --help          Show this help message"
+    echo "  -v, --version       Show version information"
+    exit 0
+}
+
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage ;;
+        -v|--version) show_version ;;
+        -V|--verbose) VERBOSE=1; shift ;;
+        --remove) REMOVE_MODE=1; shift ;;
+        -*) err "Unknown option $1"; usage ;;
+        *) POSITIONAL_ARGS+=("$1"); shift ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ "$#" -lt 1 ]; then usage; fi
 
 HOST_NAME="$1"
-
-# Find the canonical path using the by-host symlink
-CANONICAL_PATH=$(get_uuid_path_from_host "$HOST_NAME")
-[ -z "$CANONICAL_PATH" ] && err "Host '$HOST_NAME' not registered. Run 'ssh-new' first."
-
-# This is the custom config file
-CONFIG_FILE="$CANONICAL_PATH/config"
-touch "$CONFIG_FILE"
-chmod 600 "$CONFIG_FILE"
-
-COMMAND="${2:-}"
 OPTION="$2"
 VALUE="$3"
 
-case "$COMMAND" in
-    "")
-        # --- View Config ---
+CANONICAL_PATH=$(get_uuid_path_from_host "$HOST_NAME")
+if [ -z "$CANONICAL_PATH" ]; then
+    err "Host '$HOST_NAME' not registered."
+fi
+
+CONFIG_FILE="$CANONICAL_PATH/config"
+touch "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
+
+if [ "$REMOVE_MODE" == "1" ]; then
+    # remove mode: ssh-conf host --remove Option
+    if [ -z "$OPTION" ]; then err "Specify option to remove."; fi
+    sed -i.bak "/^${OPTION}\s/I d" "$CONFIG_FILE" && rm -f "$CONFIG_FILE.bak"
+    echo "Removed '$OPTION'."
+    log_event "conf-remove" "$HOST_NAME" "Removed $OPTION"
+else
+    # add/view mode
+    if [ -z "$OPTION" ]; then
+        # View config
         echo "Config for $HOST_NAME ($CONFIG_FILE):"
         cat "$CONFIG_FILE"
-        ;;
-
-    "--remove")
-        # --- Remove Config ---
-        OPTION="$3"
-        [ -z "$OPTION" ] && err "Please specify an option to remove."
-        
-        sed -i.bak "/^${OPTION}\s/I d" "$CONFIG_FILE"
-        rm -f "$CONFIG_FILE.bak"
-        echo "Removed '$OPTION' from $HOST_NAME."
-        ;;
-        
-    *)
-        # --- Add/Update Config ---
-        [ -z "$VALUE" ] && err "Please provide a value for $OPTION."
-        
+    else
+        # Add/Update
+        if [ -z "$VALUE" ]; then err "Provide value for $OPTION."; fi
         if grep -q -i "^${OPTION}\s" "$CONFIG_FILE"; then
             sed -i.bak "s/^${OPTION}\s.*/${OPTION} ${VALUE}/I" "$CONFIG_FILE"
-            echo "Updated '$OPTION' for $HOST_NAME."
+            echo "Updated '$OPTION'."
         else
             echo "${OPTION} ${VALUE}" >> "$CONFIG_FILE"
-            echo "Added '$OPTION' to $HOST_NAME."
+            echo "Added '$OPTION'."
         fi
         rm -f "$CONFIG_FILE.bak"
-        ;;
-esac
+        log_event "conf-update" "$HOST_NAME" "$OPTION=$VALUE"
+    fi
+fi

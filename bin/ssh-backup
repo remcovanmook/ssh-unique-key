@@ -1,53 +1,39 @@
 #!/bin/bash
 set -e
-
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
 
-# Parse arguments
-BACKUP_PATH=""
+usage() {
+    echo "Usage: ssh-backup [-o output_file.tar.gz]"
+    echo "  -V, --verbose   Enable verbose output"
+    echo "  -h, --help      Show this help message"
+    echo "  -v, --version   Show version information"
+    exit 0
+}
+
+OUTPUT_FILE="${HOME}/ssh-unique-keys-backup-$(date +%Y%m%d).tar.gz"
+
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        -o|--output)
-            BACKUP_PATH="$2"
-            shift 2
-            ;;
-        *)
-            err "Unknown argument: $1"
-            ;;
+    case "$1" in
+        -h|--help) usage ;;
+        -v|--version) show_version ;;
+        -V|--verbose) VERBOSE=1; shift ;;
+        -o) OUTPUT_FILE="$2"; shift 2 ;;
+        *) usage ;;
     esac
 done
 
-# Set default backup path if not specified
-if [ -z "$BACKUP_PATH" ]; then
-    BACKUP_PATH="${BACKUP_DIR}/backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+if [ ! -d "$BASE_DIR" ]; then
+    err "Directory $BASE_DIR does not exist."
 fi
 
-# Ensure backup directory exists
-mkdir -p -m 700 "$(dirname "$BACKUP_PATH")"
+echo "Backing up $BASE_DIR to $OUTPUT_FILE..."
 
-# Create temporary directory for backup
-TEMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMP_DIR"' EXIT
+tar -czf "$OUTPUT_FILE" \
+    -C "$(dirname "$BASE_DIR")" \
+    --exclude="conf.d" \
+    "$(basename "$BASE_DIR")"
 
-# Copy directory structure with correct permissions
-echo "Copying configuration..."
-cp -a "$BASE_DIR" "$TEMP_DIR/"
-
-# Create backup manifest
-cat > "$TEMP_DIR/manifest.txt" << EOF
-SSH Unique Key Backup
-Created: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-User: $USER
-Hostname: $(hostname)
-Version: 1.0
-EOF
-
-# Create encrypted backup
-echo "Creating backup archive..."
-tar -czf "$BACKUP_PATH" -C "$TEMP_DIR" .
-chmod 600 "$BACKUP_PATH"
-
-echo "Backup created successfully at: $BACKUP_PATH"
-log "INFO" "Created backup at $BACKUP_PATH"
+echo "Backup complete: $OUTPUT_FILE"
+log_event "backup" "all" "Created backup at $OUTPUT_FILE"

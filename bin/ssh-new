@@ -1,177 +1,240 @@
 #!/bin/bash
 set -e
-
-# Get the directory this script is running from
 SCRIPT_DIR=$(dirname "$0")
 # shellcheck source=./_ssh-unique-key.inc.sh
 source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
 ensure_base_dirs
 
-# --- Argument Parsing ---
-VERBOSE=false
+usage() {
+    echo "Usage: ssh-new [options] <user@host>"
+    echo "Options:"
+    echo "  --template <name>   Use a key template"
+    echo "  --legacy            Enable outdated algorithms (rsa/dss/cbc)"
+    echo "  --comment \"text\"    Display this message BEFORE connecting"
+    echo "  -V, --verbose       Enable verbose output"
+    echo "  -h, --help          Show this help message"
+    echo "  -v, --version       Show version information"
+    exit 0
+}
+
 TEMPLATE_NAME=""
+LEGACY_MODE=0
+COMMENT_TEXT=""
 POSITIONAL_ARGS=()
 
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        -v|--verbose) VERBOSE=true; shift ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage ;;
+        -v|--version) show_version ;;
+        -V|--verbose) VERBOSE=1; shift ;;
         --template) TEMPLATE_NAME="$2"; shift 2 ;;
+        --legacy) LEGACY_MODE=1; shift ;;
+        --comment) COMMENT_TEXT="$2"; shift 2 ;;
+        -*|--*) err "Unknown option $1"; usage ;;
         *) POSITIONAL_ARGS+=("$1"); shift ;;
     esac
 done
 
 if [ ${#POSITIONAL_ARGS[@]} -ne 1 ]; then
-    err "Usage: ssh-new [-v] [--template <name>] <user@host>"
+    usage
 fi
+
 USER_HOST_ARG="${POSITIONAL_ARGS[0]}"
-
-log() {
-    if [ "$VERBOSE" = true ]; then
-        echo "$@"
-    fi
-}
-
 HOST_NAME=$(get_host_from_arg "$USER_HOST_ARG")
 USER_NAME=$(get_user_from_arg "$USER_HOST_ARG")
 
-# --- Host Key Scan and Verification ---
-log "Scanning host $HOST_NAME..."
-RAW_SCAN_DATA=$(get_full_host_scan "$HOST_NAME")
-# Create the canonical, sorted version for storage and comparison
-SCAN_DATA_SORTED=$(echo "$RAW_SCAN_DATA" | sort)
+info "Checking host $HOST_NAME..."
 
-HOST_UUID=$(get_host_uuid_from_scan_data "$SCAN_DATA_SORTED")
-CANONICAL_PATH="$UUID_DIR/$HOST_UUID"
-
-
-
-EXISTING_HOST_IDENTITY=false
-
-if [ -d "$CANONICAL_PATH" ]; then
-    log "Host identity already exists. Verifying keys..."
-    EXISTING_HOST_IDENTITY=true
-    STORED_KEYS_FILE="$CANONICAL_PATH/known_host_keys"
-    
-    # Compare sorted new scan with the (already sorted) stored file
-    # Compare sorted new scan with the stored file, IGNORING the hostname field
-    # (fields 2 and 3 are algorithm and key)
-    NEW_KEYS_CONTENT=$(echo "$SCAN_DATA_SORTED" | awk '{print $2, $3}' | sort)
-    STORED_KEYS_CONTENT=$(cat "$STORED_KEYS_FILE" | awk '{print $2, $3}' | sort)
-    
-    if ! diff -q <(echo "$NEW_KEYS_CONTENT") <(echo "$STORED_KEYS_CONTENT") >/dev/null; then
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-        echo "  @       WARNING: HOST KEY CHANGED!       @" >&2
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
-        err "Host key verification failed."
-    else
-        log "Host keys verified successfully."
+# --- Auth Check ---
+if ! check_key_auth_support "$USER_HOST_ARG"; then
+    warn "Host does NOT appear to support publickey authentication."
+    read -p "Continue anyway? (y/N) " CONT
+    if [[ "$CONT" != "y" && "$CONT" != "Y" ]]; then
+        exit 1
     fi
-else
-    # Only echo this important state change if verbose, OR maybe meaningful enough to keep? 
-    # User requested reduced verbosity. Let's log it.
-    log "New host key detected. Creating new identity."
-    mkdir -p -m 700 "$CANONICAL_PATH"
-    # Store the sorted, canonical data
-    echo "$SCAN_DATA_SORTED" > "$CANONICAL_PATH/known_host_keys"
-    chmod 644 "$CANONICAL_PATH/known_host_keys"
-
-    log "Stored host keys in $CANONICAL_PATH/known_host_keys"
 fi
 
-# --- Create User Key (if needed) ---
-USER_KEY_DIR="$CANONICAL_PATH/$USER_NAME"
-mkdir -p -m 700 "$USER_KEY_DIR"
-KEY_FILE="$USER_KEY_DIR/identity"
-KEY_FILE_PUB="$USER_KEY_DIR/identity.pub"
-TEMPLATE_CONFIG_PATH=""
-KEY_GEN_TYPE=""
+# --- Scan & Verify ---
+RAW_SCAN=$(get_full_host_scan "$HOST_NAME")
+if [ -z "$RAW_SCAN" ]; then
+    err "Scan failed. Host unreachable or blocked."
+fi
+SCAN_SORTED=$(echo "$RAW_SCAN" | sort)
+UUID=$(get_host_uuid_from_scan_data "$SCAN_SORTED")
+CANONICAL="$UUID_DIR/$UUID"
+
+if [ -d "$CANONICAL" ]; then
+    info "Known host identity. Verifying..."
+    if ! diff -q <(echo "$SCAN_SORTED") "$CANONICAL/known_host_keys" >/dev/null; then
+        err "SECURITY WARNING: Host keys have changed! Possible MITM."
+    fi
+else
+    info "Creating new identity..."
+    mkdir -p -m 700 "$CANONICAL"
+    echo "$SCAN_SORTED" > "$CANONICAL/known_host_keys" && chmod 644 "$CANONICAL/known_host_keys"
+    log_event "create-identity" "$HOST_NAME" "UUID: $UUID"
+fi
+
+# --- User Keys ---
+USER_DIR="$CANONICAL/$USER_NAME"
+mkdir -p -m 700 "$USER_DIR"
+KEY_FILE="$USER_DIR/identity"
 
 if [ ! -f "$KEY_FILE" ]; then
     if [ -n "$TEMPLATE_NAME" ]; then
-        # --- TEMPLATE LOGIC ---
-        PRIORITY_LIST=("ed25519" "ecdsa" "rsa")
-        TEMPLATE_PATH_BASE="$TEMPLATE_DIR/$TEMPLATE_NAME"
-        [ ! -d "$TEMPLATE_PATH_BASE" ] && err "Template '$TEMPLATE_NAME' not found."
-        
-        TEMPLATE_CONFIG_PATH="$TEMPLATE_PATH_BASE/config"
-
-        for key_type in "${PRIORITY_LIST[@]}"; do
-            if echo "$SCAN_DATA_SORTED" | grep -q "$key_type"; then
-                if [ -f "$TEMPLATE_PATH_BASE/id_$key_type" ]; then KEY_GEN_TYPE="$key_type"; break; fi
-            fi
-        done
-        [ -z "$KEY_GEN_TYPE" ] && err "No compatible keys found in template '$TEMPLATE_NAME'."
-
-        log "Linking best common key ($KEY_GEN_TYPE) as 'identity'..."
-        TEMPLATE_KEY_REL_PATH="../../templates/$TEMPLATE_NAME/id_$KEY_GEN_TYPE"
-        (cd "$USER_KEY_DIR" && \
-         ln -s "$TEMPLATE_KEY_REL_PATH" "identity" && \
-         ln -s "$TEMPLATE_KEY_REL_PATH.pub" "identity.pub")
-    else
-        # --- NEW KEY GENERATION LOGIC ---
-        KEY_GEN_TYPE=$(get_best_key_type_from_scan_data "$SCAN_DATA_SORTED")
-        log "Generating new $KEY_GEN_TYPE key as 'identity'..."
-        
-        declare -a KEYGEN_ARGS
-        if [ "$KEY_GEN_TYPE" == "rsa" ]; then
-            KEYGEN_ARGS=("-b" "4096")
+        T_PATH="$TEMPLATE_DIR/$TEMPLATE_NAME"
+        if [ ! -d "$T_PATH" ]; then
+            err "Template not found."
         fi
         
-        ssh-keygen -t "$KEY_GEN_TYPE" -f "$KEY_FILE" \
-            -N "" -C "$USER_NAME@$HOST_NAME" "${KEYGEN_ARGS[@]}"
-        chmod 600 "$KEY_FILE"; chmod 644 "$KEY_FILE_PUB"
+        # --- Check for OPK Type ---
+        if [ -f "$T_PATH/.type" ] && [ "$(cat "$T_PATH/.type")" == "opk" ]; then
+            info "Using OpenPubKey template..."
+            
+            # Pre-flight: Check if opkssh is installed
+            if ! command -v opkssh &> /dev/null; then
+                err "Template requires 'opkssh', but it is not installed on this system."
+            fi
+            
+            CERT_PATH="$T_PATH/identity-cert.pub"
+            NEED_LOGIN=0
+            
+            if [ ! -f "$CERT_PATH" ]; then
+                warn "OPK Certificate missing in template."
+                NEED_LOGIN=1
+            else
+                if ! check_cert_validity "$CERT_PATH"; then
+                    warn "OPK Certificate has expired."
+                    NEED_LOGIN=1
+                else
+                    debug "OPK Certificate is valid."
+                fi
+            fi
+            
+            if [ "$NEED_LOGIN" -eq 1 ]; then
+                LOGIN_OPTS=""
+                if [ -f "$T_PATH/.issuer" ]; then
+                    ISSUER=$(cat "$T_PATH/.issuer")
+                    info "Refreshing credentials via opkssh (Issuer: $ISSUER)..."
+                    LOGIN_OPTS="--issuer $ISSUER"
+                else
+                    info "Refreshing credentials via opkssh..."
+                fi
+                
+                opkssh login $LOGIN_OPTS
+                
+                # --- VALIDATION: Check if credentials actually updated ---
+                if [ ! -f "$CERT_PATH" ]; then
+                    err "Login completed, but certificate file not found at $CERT_PATH."
+                fi
+                
+                if ! check_cert_validity "$CERT_PATH"; then
+                    echo "--------------------------------------------------------"
+                    echo "ERROR: Certificate is still expired after login."
+                    echo "The template points to: $CERT_PATH"
+                    echo "opkssh likely updated a different file (e.g. ~/.ssh/id_ecdsa-cert.pub)."
+                    echo "Please update the template file with the new certificate and try again."
+                    echo "--------------------------------------------------------"
+                    err "Credential refresh failed. Aborting."
+                fi
+                info "Credentials successfully refreshed and validated."
+            fi
+            
+            ln -s "../../templates/$TEMPLATE_NAME/identity" "$KEY_FILE"
+            if [ -f "$T_PATH/identity.pub" ]; then
+                ln -s "../../templates/$TEMPLATE_NAME/identity.pub" "$KEY_FILE.pub"
+            fi
+            if [ -f "$T_PATH/identity-cert.pub" ]; then
+                ln -s "../../templates/$TEMPLATE_NAME/identity-cert.pub" "$KEY_FILE-cert.pub"
+            fi
+            log_event "link-key" "$USER_HOST_ARG" "Template: $TEMPLATE_NAME (OPK)"
+            
+        else
+            # --- Standard Template Logic ---
+            if [ -f "$T_PATH/id_ed25519_sk" ]; then
+                 K_TYPE="ed25519_sk"
+            else
+                 for t in ed25519 ecdsa rsa; do
+                     if echo "$SCAN_SORTED" | grep -q "ssh-$t" && [ -f "$T_PATH/id_$t" ]; then
+                         K_TYPE="$t"; break
+                     fi
+                 done
+            fi
+            if [ -z "$K_TYPE" ]; then
+                err "No compatible key in template."
+            fi
+            ln -s "../../templates/$TEMPLATE_NAME/id_$K_TYPE" "$KEY_FILE"
+            if [ -f "$T_PATH/id_$K_TYPE.pub" ]; then
+                ln -s "../../templates/$TEMPLATE_NAME/id_$K_TYPE.pub" "$KEY_FILE.pub"
+            fi
+            log_event "link-key" "$USER_HOST_ARG" "Template: $TEMPLATE_NAME ($K_TYPE)"
+        fi
+    else
+        K_TYPE=$(get_best_key_type_from_scan_data "$SCAN_SORTED")
+        if [ "$K_TYPE" == "rsa" ]; then
+            K_ARGS=("-b" "4096")
+        else
+            K_ARGS=()
+        fi
+        ssh-keygen -t "$K_TYPE" -f "$KEY_FILE" -N "" -C "$USER_NAME@$HOST_NAME" "${K_ARGS[@]}"
+        chmod 600 "$KEY_FILE"
+        log_event "gen-key" "$USER_HOST_ARG" "Type: $K_TYPE"
     fi
 fi
 
-# --- Create Host Config File (with template inheritance) ---
-HOST_CONFIG_FILE="$CANONICAL_PATH/config"
-if [ ! -f "$HOST_CONFIG_FILE" ]; then
-    touch "$HOST_CONFIG_FILE"
-    chmod 600 "$HOST_CONFIG_FILE"
-    
-    if [ -n "$TEMPLATE_CONFIG_PATH" ] && [ -f "$TEMPLATE_CONFIG_PATH" ]; then
-        # Get absolute path for the Include directive
-        ABS_TEMPLATE_CONFIG_PATH=$(cd "$(dirname "$TEMPLATE_CONFIG_PATH")" && pwd)/$(basename "$TEMPLATE_CONFIG_PATH")
-        echo "# Inherits from template: $TEMPLATE_NAME" > "$HOST_CONFIG_FILE"
-        echo "Include $ABS_TEMPLATE_CONFIG_PATH" >> "$HOST_CONFIG_FILE"
-        echo "" >> "$HOST_CONFIG_FILE"
-        echo "# Add host-specific overrides below" >> "$HOST_CONFIG_FILE"
+# --- Config Generation ---
+CONF="$CANONICAL/config"
+TRUSTED_CONF="$CANONICAL/trusted.conf"
+
+if [ ! -f "$CONF" ]; then
+    touch "$CONF" && chmod 600 "$CONF"
+    if [ -n "$TEMPLATE_NAME" ]; then
+        echo "Include ../../templates/$TEMPLATE_NAME/config" >> "$CONF"
     fi
 fi
 
-# --- Copy Key to Host (This populates known_hosts) ---
-# Only run ssh-copy-id if we didn't just verify an existing identity
-# (Assume existing identity means we've been here before)
-if [ "$EXISTING_HOST_IDENTITY" = false ]; then
-    log "Copying public key to $USER_HOST_ARG (password may be required)..."
-    ssh-copy-id -i "$KEY_FILE_PUB" "$USER_HOST_ARG"
+if [ "$LEGACY_MODE" -eq 1 ]; then
+    if ! grep -q "KexAlgorithms" "$CONF"; then
+        echo -e "\n# Legacy Options enabled via --legacy" >> "$CONF"
+        get_legacy_options >> "$CONF"
+        log_event "config-legacy" "$HOST_NAME" "Enabled legacy options"
+    fi
 fi
 
-# --- Create by-host Symlink ---
-HOST_SYMLINK_PATH="$HOST_DIR/$HOST_NAME"
-if [ ! -L "$HOST_SYMLINK_PATH" ]; then
-    log "Creating by-host symlink..."
-    ln -s "$CANONICAL_PATH" "$HOST_SYMLINK_PATH"
+if [ -n "$COMMENT_TEXT" ]; then
+    sed -i.bak '/^Match host %h exec/d' "$CONF" && rm -f "$CONF.bak"
+    echo "Match host %h exec \"echo -e '\033[1;33m[NOTE] $COMMENT_TEXT\033[0m' >&2\"" >> "$CONF"
 fi
 
-# --- Create ALL by-key Symlinks ---
-log "Creating by-key symlinks for all host keys..."
-# Use the *unsorted* raw data to get the base64 keys
-echo "$RAW_SCAN_DATA" | while read -r line; do
-    [ -z "$line" ] && continue
-    # The 3rd field is the base64 key
-    BASE64_KEY=$(echo "$line" | awk '{print $3}')
-    [ -z "$BASE64_KEY" ] && continue
-    
-    KEY_SYMLINK_PATH="$KEY_DIR/$BASE64_KEY"
-    KEY_SYMLINK_DIR=$(dirname "$KEY_SYMLINK_PATH")
-    
-    mkdir -p -m 700 "$KEY_SYMLINK_DIR"
-    # Symlink points to the host-uuid *directory*
-    ln -sf "$CANONICAL_PATH" "$KEY_SYMLINK_PATH"
-    log "  -> $KEY_SYMLINK_PATH"
+cat > "$TRUSTED_CONF" << EOF
+# Trusted by cryptographic path lookup (%K)
+StrictHostKeyChecking no
+UserKnownHostsFile /dev/null
+LogLevel ERROR
+Include $CONF
+EOF
+chmod 600 "$TRUSTED_CONF"
+
+# --- Finishing Up ---
+if [ -f "$KEY_FILE.pub" ]; then
+    info "Copying key..."
+    ssh-copy-id -i "$KEY_FILE.pub" -o StrictHostKeyChecking=accept-new "$USER_HOST_ARG"
+else
+    if [ -f "$KEY_FILE-cert.pub" ]; then
+         warn "Certificate found. Assuming server trusts CA. Skipping copy."
+    else
+         warn "No public key file found. Skipping ssh-copy-id."
+    fi
+fi
+
+info "Linking..."
+ln -sf "$CANONICAL" "$HOST_DIR/$HOST_NAME"
+echo "$SCAN_SORTED" | while read -r l; do
+   B64=$(echo "$l" | awk '{print $3}')
+   if [ -n "$B64" ]; then
+       mkdir -p "$KEY_DIR/$(dirname "$B64")" && ln -sf "$CANONICAL" "$KEY_DIR/$B64"
+   fi
 done
 
-# --- Connect to host ---
-log "Done. Connecting to $USER_HOST_ARG..."
+info "Connecting..."
 exec ssh "$USER_HOST_ARG"
