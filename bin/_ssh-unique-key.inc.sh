@@ -105,6 +105,17 @@ get_host_uuid_from_scan_data() {
     echo "$HASH"
 }
 
+get_key_hash() {
+    local KEY_DATA="$1"
+    local HASH
+    if command -v shasum >/dev/null; then
+        HASH=$(echo -n "$KEY_DATA" | shasum -a 256 | awk '{print $1}')
+    else
+        HASH=$(echo -n "$KEY_DATA" | sha256sum | awk '{print $1}')
+    fi
+    echo "$HASH"
+}
+
 get_best_key_type_from_scan_data() {
     local TYPE
     TYPE=$(echo "$1" | awk '/ssh-ed25519/{e=1} /ecdsa/{c=1} /ssh-rsa/{r=1} END{if(e)print "ed25519"; else if(c)print "ecdsa"; else if(r)print "rsa"; else print "rsa"}')

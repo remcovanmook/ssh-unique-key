@@ -11,6 +11,8 @@ usage() {
     echo "  --template <name>   Use a key template"
     echo "  --legacy            Enable outdated algorithms (rsa/dss/cbc)"
     echo "  --comment \"text\"    Display this message BEFORE connecting"
+    echo "  --comment \"text\"    Display this message BEFORE connecting"
+    echo "  --key-comment \"text\"  Set the public key comment (description)"
     echo "  -V, --verbose       Enable verbose output"
     echo "  -h, --help          Show this help message"
     echo "  -v, --version       Show version information"
@@ -19,7 +21,11 @@ usage() {
 
 TEMPLATE_NAME=""
 LEGACY_MODE=0
+NO_CONNECT=0
 COMMENT_TEXT=""
+NO_CONNECT=0
+COMMENT_TEXT=""
+KEY_COMMENT=""
 POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -29,7 +35,10 @@ while [[ $# -gt 0 ]]; do
         -V|--verbose) VERBOSE=1; shift ;;
         --template) TEMPLATE_NAME="$2"; shift 2 ;;
         --legacy) LEGACY_MODE=1; shift ;;
+        --no-connect) NO_CONNECT=1; shift ;;
         --comment) COMMENT_TEXT="$2"; shift 2 ;;
+        --comment) COMMENT_TEXT="$2"; shift 2 ;;
+        --key-comment) KEY_COMMENT="$2"; shift 2 ;;
         -*|--*) err "Unknown option $1"; usage ;;
         *) POSITIONAL_ARGS+=("$1"); shift ;;
     esac
@@ -43,6 +52,10 @@ USER_HOST_ARG="${POSITIONAL_ARGS[0]}"
 HOST_NAME=$(get_host_from_arg "$USER_HOST_ARG")
 USER_NAME=$(get_user_from_arg "$USER_HOST_ARG")
 
+# Set default key comment if not provided
+if [ -z "$KEY_COMMENT" ]; then
+    KEY_COMMENT="$USER_NAME@$HOST_NAME"
+fi
 info "Checking host $HOST_NAME..."
 
 # --- Auth Check ---
@@ -65,8 +78,18 @@ CANONICAL="$UUID_DIR/$UUID"
 
 if [ -d "$CANONICAL" ]; then
     info "Known host identity. Verifying..."
-    if ! diff -q <(echo "$SCAN_SORTED") "$CANONICAL/known_host_keys" >/dev/null; then
+    
+    # Compare keys only (ignore hostname/IP in first column)
+    SCAN_KEYS=$(echo "$SCAN_SORTED" | awk '{$1=""; print $0}' | sort)
+    STORED_KEYS=$(cat "$CANONICAL/known_host_keys" | awk '{$1=""; print $0}' | sort)
+
+    if [ "$SCAN_KEYS" != "$STORED_KEYS" ]; then
+        warn "Diff between new scan (left) and stored keys (right):"
+        diff <(echo "$SCAN_SORTED") "$CANONICAL/known_host_keys" || true
+        
         err "SECURITY WARNING: Host keys have changed! Possible MITM."
+    else
+        info "Host verification passed."
     fi
 else
     info "Creating new identity..."
@@ -140,12 +163,12 @@ if [ ! -f "$KEY_FILE" ]; then
                 info "Credentials successfully refreshed and validated."
             fi
             
-            ln -s "../../templates/$TEMPLATE_NAME/identity" "$KEY_FILE"
+            ln -s "../../../templates/$TEMPLATE_NAME/identity" "$KEY_FILE"
             if [ -f "$T_PATH/identity.pub" ]; then
-                ln -s "../../templates/$TEMPLATE_NAME/identity.pub" "$KEY_FILE.pub"
+                ln -s "../../../templates/$TEMPLATE_NAME/identity.pub" "$KEY_FILE.pub"
             fi
             if [ -f "$T_PATH/identity-cert.pub" ]; then
-                ln -s "../../templates/$TEMPLATE_NAME/identity-cert.pub" "$KEY_FILE-cert.pub"
+                ln -s "../../../templates/$TEMPLATE_NAME/identity-cert.pub" "$KEY_FILE-cert.pub"
             fi
             log_event "link-key" "$USER_HOST_ARG" "Template: $TEMPLATE_NAME (OPK)"
             
@@ -163,9 +186,9 @@ if [ ! -f "$KEY_FILE" ]; then
             if [ -z "$K_TYPE" ]; then
                 err "No compatible key in template."
             fi
-            ln -s "../../templates/$TEMPLATE_NAME/id_$K_TYPE" "$KEY_FILE"
+            ln -s "../../../templates/$TEMPLATE_NAME/id_$K_TYPE" "$KEY_FILE"
             if [ -f "$T_PATH/id_$K_TYPE.pub" ]; then
-                ln -s "../../templates/$TEMPLATE_NAME/id_$K_TYPE.pub" "$KEY_FILE.pub"
+                ln -s "../../../templates/$TEMPLATE_NAME/id_$K_TYPE.pub" "$KEY_FILE.pub"
             fi
             log_event "link-key" "$USER_HOST_ARG" "Template: $TEMPLATE_NAME ($K_TYPE)"
         fi
@@ -176,7 +199,7 @@ if [ ! -f "$KEY_FILE" ]; then
         else
             K_ARGS=()
         fi
-        ssh-keygen -t "$K_TYPE" -f "$KEY_FILE" -N "" -C "$USER_NAME@$HOST_NAME" "${K_ARGS[@]}"
+        ssh-keygen -t "$K_TYPE" -f "$KEY_FILE" -N "" -C "$KEY_COMMENT" "${K_ARGS[@]}"
         chmod 600 "$KEY_FILE"
         log_event "gen-key" "$USER_HOST_ARG" "Type: $K_TYPE"
     fi
@@ -189,7 +212,7 @@ TRUSTED_CONF="$CANONICAL/trusted.conf"
 if [ ! -f "$CONF" ]; then
     touch "$CONF" && chmod 600 "$CONF"
     if [ -n "$TEMPLATE_NAME" ]; then
-        echo "Include ../../templates/$TEMPLATE_NAME/config" >> "$CONF"
+        echo "Include ../../../templates/$TEMPLATE_NAME/config" >> "$CONF"
     fi
 fi
 
@@ -216,15 +239,19 @@ EOF
 chmod 600 "$TRUSTED_CONF"
 
 # --- Finishing Up ---
-if [ -f "$KEY_FILE.pub" ]; then
-    info "Copying key..."
-    ssh-copy-id -i "$KEY_FILE.pub" -o StrictHostKeyChecking=accept-new "$USER_HOST_ARG"
-else
-    if [ -f "$KEY_FILE-cert.pub" ]; then
-         warn "Certificate found. Assuming server trusts CA. Skipping copy."
+if [ "$NO_CONNECT" -eq 0 ]; then
+    if [ -f "$KEY_FILE.pub" ]; then
+        info "Copying key..."
+        ssh-copy-id -i "$KEY_FILE.pub" -o StrictHostKeyChecking=accept-new "$USER_HOST_ARG"
     else
-         warn "No public key file found. Skipping ssh-copy-id."
+        if [ -f "$KEY_FILE-cert.pub" ]; then
+             warn "Certificate found. Assuming server trusts CA. Skipping copy."
+        else
+             warn "No public key file found. Skipping ssh-copy-id."
+        fi
     fi
+else
+    info "Skipping ssh-copy-id because --no-connect was specified."
 fi
 
 info "Linking..."
@@ -232,9 +259,31 @@ ln -sf "$CANONICAL" "$HOST_DIR/$HOST_NAME"
 echo "$SCAN_SORTED" | while read -r l; do
    B64=$(echo "$l" | awk '{print $3}')
    if [ -n "$B64" ]; then
-       mkdir -p "$KEY_DIR/$(dirname "$B64")" && ln -sf "$CANONICAL" "$KEY_DIR/$B64"
+       MAX_PATH=4096
+       MAX_NAME=255
+       FULL_PATH="$KEY_DIR/$B64"
+
+       # Check total path length
+       if [ ${#FULL_PATH} -gt $MAX_PATH ]; then
+           warn "Total path too long (${#FULL_PATH} > $MAX_PATH). Skipping by-key link."
+           continue
+       fi
+
+       # Check if any path component (separated by /) exceeds filesystem limit (255)
+       MAX_LEN=$(echo "$B64" | awk -F/ '{max=0; for(i=1;i<=NF;i++) if(length($i)>max) max=length($i); print max}')
+       
+       if [ "$MAX_LEN" -gt $MAX_NAME ]; then
+           warn "Key path component too long ($MAX_LEN > $MAX_NAME). Skipping by-key link."
+       else
+           mkdir -p "$KEY_DIR/$(dirname "$B64")" && ln -sf "$CANONICAL" "$KEY_DIR/$B64"
+       fi
    fi
 done
+
+if [ "$NO_CONNECT" -eq 1 ]; then
+    info "Setup complete. Connection skipped (--no-connect)."
+    exit 0
+fi
 
 info "Connecting..."
 exec ssh "$USER_HOST_ARG"

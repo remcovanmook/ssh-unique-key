@@ -1,0 +1,110 @@
+#!/bin/bash
+set -e
+SCRIPT_DIR=$(dirname "$0")
+# shellcheck source=./_ssh-unique-key.inc.sh
+source "${SCRIPT_DIR}/_ssh-unique-key.inc.sh"
+
+usage() {
+    echo "Usage: ssh-user-rotate <uuid> <user_dir_name>"
+    echo "Example: ssh-user-rotate 5f4dcc3b5aa765d61d8327deb882cf99 my-server"
+    exit 1
+}
+
+if [ "$#" -ne 2 ]; then usage; fi
+
+UUID="$1"
+USER_NAME="$2"
+
+# --- Validate Paths ---
+UUID_PATH="$UUID_DIR/$UUID"
+if [ ! -d "$UUID_PATH" ]; then err "UUID path not found: $UUID_PATH"; fi
+
+USER_DIR="$UUID_PATH/$USER_NAME"
+if [ ! -d "$USER_DIR" ]; then err "User directory not found: $USER_DIR"; fi
+
+OLD_KEY="$USER_DIR/identity"
+OLD_KEY_PUB="$OLD_KEY.pub"
+
+if [ ! -f "$OLD_KEY" ]; then err "Identity file not found: $OLD_KEY"; fi
+
+# Resolve Hostname from UUID aliases
+# We need a valid hostname to connect to.
+# Check aliases in identities (not easily avail here).
+# Check HOST_DIR symlinks pointing to this UUID.
+TARGET_HOST=""
+if [ -d "$HOST_DIR" ]; then
+    for host in "$HOST_DIR"/*; do
+        if [ -L "$host" ]; then
+            TARGET=$(readlink "$host")
+            TARGET_ABS=$(cd "$HOST_DIR" && readlink -f "$host")
+            if [ "$(basename "$TARGET_ABS")" == "$UUID" ]; then
+                TARGET_HOST=$(basename "$host")
+                break
+            fi
+        fi
+    done
+fi
+
+if [ -z "$TARGET_HOST" ]; then
+    # Fallback: Is UUID actually an IP/Host? No, it's a hash.
+    # We might fail if no alias.
+    err "Could not resolve hostname for UUID $UUID"
+fi
+
+info "Rotating key for user '$USER_NAME' on host '$TARGET_HOST' (UUID: $UUID)..."
+
+# --- 1. Generate New Key ---
+info "Generating new key..."
+NEW_KEY_TEMP=$(mktemp)
+NEW_KEY_PUB_TEMP="${NEW_KEY_TEMP}.pub"
+trap 'rm -f "$NEW_KEY_TEMP" "$NEW_KEY_PUB_TEMP"' EXIT
+
+# Detect type from old key or default to ed25519
+# We'll just use ed25519 for rotation unless legacy flag passed?
+# For now: standardize on ed25519
+ssh-keygen -t ed25519 -f "$NEW_KEY_TEMP" -N "" -C "$USER_NAME@$TARGET_HOST-rotated-$(date +%Y%m%d)" >/dev/null
+
+# --- 2. Install New Key ---
+info "Installing new key to remote host..."
+# Use the OLD key to install the NEW key
+# strict host key checking accept-new to be safe
+export SSH_ASKPASS_REQUIRE=force # Ensure no prompt
+if ! ssh-copy-id -i "$NEW_KEY_PUB_TEMP" -o IdentityFile="$OLD_KEY" -o StrictHostKeyChecking=accept-new "$USER_NAME@$TARGET_HOST"; then
+    err "Failed to install new key on remote host."
+fi
+
+# --- 3. Test New Key ---
+info "Verifying new key connection..."
+if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$USER_NAME@$TARGET_HOST" "echo Connection Verified"; then
+    err "New key validation failed! Aborting rotation."
+fi
+
+# --- 4. Remove Old Key from Remote ---
+info "Removing old key from remote host..."
+OLD_PUB_CONTENT=$(cat "$OLD_KEY_PUB" | awk '{print $2}')
+# We generally match by the blobs.
+# We run sed on authorized_keys.
+# Be careful with quoting.
+# Escape slashes in blob just in case (base64 standard chars usually fine in sed, but / is possible?)
+# Base64 is A-Za-z0-9+/=
+# We should escape / 
+SAFE_BLOB=$(echo "$OLD_PUB_CONTENT" | sed 's/\//\\\//g')
+
+CMD="sed -i.bak '/$SAFE_BLOB/d' ~/.ssh/authorized_keys && rm -f ~/.ssh/authorized_keys.bak"
+if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$USER_NAME@$TARGET_HOST" "$CMD"; then
+    warn "Failed to remove old key from remote host. It might remain authorize but local key will be replaced."
+fi
+
+# --- 5. Swap Local Keys ---
+info "Swapping local keys..."
+mv "$NEW_KEY_TEMP" "$OLD_KEY"
+mv "$NEW_KEY_PUB_TEMP" "$OLD_KEY_PUB"
+chmod 600 "$OLD_KEY"
+chmod 644 "$OLD_KEY_PUB"
+
+# Update Known Host Keys locally?
+# No, rotating USER key doesn't affect HOST keys.
+
+log_event "rotate-key" "$USER_NAME@$TARGET_HOST" "Rotated to new ED25519 key"
+info "Rotation complete!"
+exit 0

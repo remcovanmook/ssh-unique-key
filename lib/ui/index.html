@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH Unique Keys</title>
+
+    <link rel="stylesheet" href="/assets/style.css">
+
+    {% if xterm_enabled %}
+    <link rel="stylesheet" href="/assets/xterm/xterm.css" />
+    <script src="/assets/xterm/xterm.js"></script>
+    <script src="/assets/xterm/xterm-addon-fit.js"></script>
+    <script src="/assets/xterm/socket.io.js"></script>
+    {% endif %}
+</head>
+
+<body>
+    <div id="security-warning"
+        style="display:none; background-color: #d32f2f; color: white; text-align: center; padding: 10px; font-weight: bold;">
+        ⚠️ SECURITY WARNING: Accessing via a non-local address is unsafe!
+    </div>
+    <div class="container">
+        <!-- Header & Nav -->
+        <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h1 style="margin:0;">SSH Key Manager</h1>
+        </div>
+
+        <div class="nav-bar">
+            <div class="nav-item active" onclick="switchView('dashboard')" id="nav-dashboard">Dashboard</div>
+            <div class="nav-item" onclick="switchView('templates')" id="nav-templates">Templates</div>
+            <div class="nav-item" onclick="switchView('history')" id="nav-history">History</div>
+
+            <div class="nav-right">
+                <a href="/logout?token={{ token }}" class="btn" style="background-color: #666; color: white;">Logout</a>
+            </div>
+        </div>
+
+        {% if get_flashed_messages() %}
+        <div style="background-color: #ffcccc; color: #cc0000; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
+            {{ get_flashed_messages()[0] }}
+        </div>
+        {% endif %}
+
+        <!-- DASHBOARD VIEW -->
+        <div id="view-dashboard" class="view-section active">
+            <div style="margin-bottom: 15px; text-align: right;">
+                <button class="btn btn-green" onclick="document.getElementById('createModal').style.display='block'">+
+                    New Identity</button>
+            </div>
+
+            <table class="table" style="margin-top:0;">
+                <thead>
+                    <tr>
+                        <th width="30%">Host</th>
+                        <th width="35%">Users</th>
+                        <th width="25%">Our Key</th>
+                        <th width="10%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for identity in identities %}
+                    {% set identity_loop = loop %}
+                    {% if identity.users %}
+                    {% for user in identity.users %}
+                    <tr class="{{ 'group-odd' if identity_loop.index is odd else 'group-even' }}"
+                        style="border-bottom: 1px solid #e0e0e0;">
+                        {% if loop.first %}
+                        <td rowspan="{{ identity.users|length }}" style="vertical-align: top; background-color: #fff;">
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    {% for alias in identity.aliases %}
+                                    <div style="font-weight: bold; padding-bottom: 2px;">{{ alias }}</div>
+                                    {% else %}
+                                    <span style="color: #999; font-style: italic;">(No alias)</span>
+                                    {% endfor %}
+                                </div>
+                                <button class="btn-copy" onclick="openInfoModal('{{ identity.uuid }}')"
+                                    title="View Host Details" style="margin-left: 10px;">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                        {% endif %}
+                        <td>
+                            <div
+                                style="display: inline-flex; align-items: center; margin-right: 5px; margin-bottom: 4px;">
+                                <span class="badge badge-blue">{{ user.name }}</span>
+                                <!-- Connection Actions -->
+
+                                <button class="btn-copy"
+                                    onclick="prepareConnect('{{ identity.uuid }}', '{{ user.name }}')"
+                                    title="Connect in Terminal">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="4 17 10 11 4 5"></polyline>
+                                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                        <td>
+                            {% if user.is_template %}
+                            <span class="badge badge-purple" title="This key template is inherited">Template: {{
+                                user.template_name }}</span>
+                            {% else %}
+                            {% for ok in user.ssh_keys %}
+                            <div style="display: inline-flex; align-items: center; margin-right: 5px;">
+                                <span class="badge badge-gray">{{ ok.type }}</span>
+                                <button class="btn-copy" onclick="copyToClipboard('{{ ok.content }}')"
+                                    title="Copy Public Key">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            {% else %}
+                            <span style="color:#ccc; font-style:italic; font-size:0.8em;">No key found</span>
+                            {% endfor %}
+                            {% endif %}
+                        </td>
+                        <td style="white-space: nowrap;">
+                            <!-- Row Actions: Rotate & Delete -->
+                            <button class="btn-copy" onclick="rotateUserKey('{{ identity.uuid }}', '{{ user.name }}')"
+                                title="Rotate Key (Generate New, Install, Remove Old)"
+                                style="color: #2196f3; margin-right: 5px;">
+                                <span style="font-size:1.2em;">&#x21bb;</span>
+                            </button>
+                            <button class="btn-copy" onclick="deleteUser('{{ identity.uuid }}', '{{ user.name }}')"
+                                title="Delete User (Local)" style="color: #f44336;">
+                                <span style="font-size:1.2em;">&#x1F5D1;</span>
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td>
+                            <div style="display: flex; align-items: center; justify-content: space-between;">
+                                <div>
+                                    {% for alias in identity.aliases %}
+                                    <div style="font-weight: bold; padding-bottom: 2px;">{{ alias }}</div>
+                                    {% else %}
+                                    <span style="color: #999; font-style: italic;">(No alias)</span>
+                                    {% endfor %}
+                                </div>
+                                <button class="btn-copy" onclick="openInfoModal('{{ identity.uuid }}')"
+                                    title="View Host Details" style="margin-left: 10px;">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                    </svg>
+                                </button>
+                            </div>
+                        </td>
+                        <td colspan="3" style="color: #999; font-style: italic;">No users found for this host UUID.</td>
+                    </tr>
+                    {% endif %}
+                    {% else %}
+                    <tr>
+                        <td colspan="4" style="text-align: center; color: #777; padding: 20px;">No identities found.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- TEMPLATES VIEW -->
+        <div id="view-templates" class="view-section">
+            <h2>Template Management</h2>
+            <div
+                style="background: #fafafa; padding: 15px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 20px;">
+                <strong>Create New Template</strong>
+                <form action="/api/templates?token={{ token }}" method="POST"
+                    style="margin-top: 10px; display: flex; gap: 10px; max-width: 500px;">
+                    <input type="text" name="name" placeholder="Template Name (e.g. 'work')" required
+                        style="flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+                    <button type="submit" class="btn btn-blue">Create</button>
+                </form>
+            </div>
+
+            <div id="templateList">Loading...</div>
+        </div>
+
+        <!-- HISTORY VIEW -->
+        <div id="view-history" class="view-section">
+            <div style="display:flex; justify-content: space-between; align-items:center;">
+                <h2>Operation History</h2>
+                <button class="btn btn-blue" onclick="fetchHistory()">Refresh</button>
+            </div>
+            <div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px;">
+                <table class="table" style="margin-top: 0;">
+                    <thead>
+                        <tr style="background: #eee;">
+                            <th>Time (UTC)</th>
+                            <th>User</th>
+                            <th>Action</th>
+                            <th>Target</th>
+                            <th width="40%">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyList"></tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Modals (Create, Deploy, Info) -->
+    <!-- Create Modal -->
+    <div id="createModal" class="modal">
+        <div class="modal-content">
+            <h3>Add New Identity</h3>
+            <!-- Updated form to support Xterm Interception -->
+            <form action="/create?token={{ token }}" method="POST" onsubmit="handleCreateSubmit(event)">
+                <div style="margin-bottom: 10px;">
+                    <label>Target Host (user@hostname):</label><br>
+                    <input type="text" name="user_host" id="create_user_host" required
+                        style="width: 100%; padding: 5px;" placeholder="root@192.168.1.10">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label>Template:</label><br>
+                    <select name="template" id="create_template_select" style="width: 100%; padding: 5px;"
+                        onchange="toggleKeyComment()">
+                        <option value="none">None (Auto-detect Key Type)</option>
+                        {% for t in templates %}
+                        <option value="{{ t.name }}">{{ t.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div style="margin-bottom: 10px;" id="create_key_comment_div">
+                    <label>Key Comment (Public Key Description):</label><br>
+                    <input type="text" name="key_comment" id="create_key_comment" style="width: 100%; padding: 5px;"
+                        placeholder="e.g. user@host-date">
+                </div>
+                <div style="text-align: right; margin-top: 20px;">
+                    <button type="button" class="btn"
+                        onclick="document.getElementById('createModal').style.display='none'">Cancel</button>
+                    <button type="submit" class="btn btn-green">Create & Deploy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Deploy Modal -->
+    <div id="deployModal" class="modal">
+        <div class="modal-content">
+            <h3>Deploy Key</h3>
+            <p>Deploy key for <strong id="deploy_user"></strong> to host?</p>
+            <form action="/deploy?token={{ token }}" method="POST">
+                <input type="hidden" name="uuid" id="deploy_uuid">
+                <input type="hidden" name="user" id="deploy_user_input">
+                <input type="hidden" name="target_host" id="deploy_target_host">
+                <div style="margin-bottom: 10px;">
+                    <label>Password (if needed):</label>
+                    <input type="password" name="password" style="width: 100%; padding: 5px;">
+                </div>
+                <div style="text-align: right;">
+                    <button type="button" class="btn"
+                        onclick="document.getElementById('deployModal').style.display='none'">Cancel</button>
+                    <button type="submit" class="btn btn-blue">Deploy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Connect Modal -->
+    <div id="connectModal" class="modal">
+        <div class="modal-content">
+            <h3>Connect to Host</h3>
+            <p>Select the hostname to connect to:</p>
+            <form id="connectForm" onsubmit="return false;">
+                <input type="hidden" id="connect_user">
+                <div id="connect_aliases_list" style="margin-bottom: 20px; max-height: 200px; overflow-y: auto;">
+                    <!-- Radio buttons injected here -->
+                </div>
+                <div style="text-align: right;">
+                    <button type="button" class="btn"
+                        onclick="document.getElementById('connectModal').style.display='none'">Cancel</button>
+                    <button type="button" class="btn btn-blue" onclick="triggerConnectSubmit()">Connect</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- TERMINAL MODAL (Xterm) -->
+    <div id="terminalModal" class="modal">
+        <div class="modal-content modal-large">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 id="terminal-title" style="margin:0;">Terminal</h3>
+                <div>
+                    <button id="btn-detach" class="btn btn-blue" onclick="detachTerminal()"
+                        style="padding:4px 8px; font-size:0.8em; margin-right:5px;">Detach</button>
+                    <button id="btn-close" class="btn btn-red" onclick="closeTerminal()"
+                        style="padding:4px 8px; font-size:0.8em;">Close</button>
+                </div>
+            </div>
+            <div id="terminal-container"></div>
+            <button id="popout-close" onclick="window.close()" style="display:none;">Close</button>
+        </div>
+    </div>
+
+    <!-- Info Modal -->
+    <div id="infoModal" class="modal">
+        <div class="modal-content">
+            <h3>Host Details</h3>
+            <!-- ... content ... -->
+            <div style="margin-bottom: 10px;">
+                <strong>UUID:</strong> <span id="info_uuid" style="font-family: monospace;"></span>
+            </div>
+            <!-- Storage Path Removed -->
+            <div style="margin-bottom: 20px;">
+                <strong>Known Host Keys:</strong>
+                <div style="max-height: 200px; overflow-y: auto; background: #fafafa; border: 1px solid #ddd;">
+                    <table class="table" style="margin:0; font-size: 0.9em;">
+                        <tbody id="info_host_keys_body"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <button type="button" class="btn"
+                    onclick="document.getElementById('infoModal').style.display='none'">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast">Copied to clipboard!</div>
+
+    <!-- Result Modal (Auto-open if output exists) -->
+    {% if result_output %}
+    <div id="resultModal" class="modal" style="display:block">
+        <div class="modal-content">
+            <h3>Execution Result: {{ result_status|default('info')|upper }}</h3>
+            <pre
+                style="background:#f4f4f4; padding:10px; border:1px solid #ddd; overflow:auto; max-height:300px; font-size:0.9em;">{{ result_output }}</pre>
+            <div style="text-align: right; margin-top: 10px;">
+                <button class="btn" onclick="document.getElementById('resultModal').style.display='none'">Close</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Initialization and External JS -->
+    <script>
+        window.identitiesList = {{ identities | tojson }};
+        window.authToken = "{{ token }}";
+        window.xtermEnabled = {{ 'true' if xterm_enabled else 'false' }};
+    </script>
+    <script src="/assets/app.js"></script>
+</body>
+
+</html>
