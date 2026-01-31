@@ -42,7 +42,9 @@ touch "$CONFIG_FILE" && chmod 600 "$CONFIG_FILE"
 if [ "$REMOVE_MODE" == "1" ]; then
     # remove mode: ssh-conf host --remove Option
     if [ -z "$OPTION" ]; then err "Specify option to remove."; fi
-    sed -i.bak "/^${OPTION}\s/I d" "$CONFIG_FILE" && rm -f "$CONFIG_FILE.bak"
+    # Sanitize OPTION for use in sed pattern (escape regex metacharacters)
+    SAFE_OPTION=$(printf '%s\n' "$OPTION" | sed 's/[[\.*^$()+?{|/]/\\&/g')
+    sed -i.bak "/^${SAFE_OPTION}\s/I d" "$CONFIG_FILE" && rm -f "$CONFIG_FILE.bak"
     echo "Removed '$OPTION'."
     log_event "conf-remove" "$HOST_NAME" "Removed $OPTION"
 else
@@ -54,8 +56,10 @@ else
     else
         # Add/Update
         if [ -z "$VALUE" ]; then err "Provide value for $OPTION."; fi
-        if grep -q -i "^${OPTION}\s" "$CONFIG_FILE"; then
-            sed -i.bak "s/^${OPTION}\s.*/${OPTION} ${VALUE}/I" "$CONFIG_FILE"
+        SAFE_OPTION=$(printf '%s\n' "$OPTION" | sed 's/[[\.*^$()+?{|/]/\\&/g')
+        SAFE_VALUE=$(printf '%s\n' "$VALUE" | sed 's/[&/\]/\\&/g')
+        if grep -q -i "^${SAFE_OPTION}\s" "$CONFIG_FILE"; then
+            sed -i.bak "s/^${SAFE_OPTION}\s.*/${OPTION} ${SAFE_VALUE}/I" "$CONFIG_FILE"
             echo "Updated '$OPTION'."
         else
             echo "${OPTION} ${VALUE}" >> "$CONFIG_FILE"

@@ -33,7 +33,7 @@
             <div class="nav-item" onclick="switchView('history')" id="nav-history">History</div>
 
             <div class="nav-right">
-                <a href="/logout?token={{ token }}" class="btn" style="background-color: #666; color: white;">Logout</a>
+                <a href="/logout" class="btn" style="background-color: #666; color: white;">Logout</a>
             </div>
         </div>
 
@@ -182,7 +182,7 @@
             <div
                 style="background: #fafafa; padding: 15px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 20px;">
                 <strong>Create New Template</strong>
-                <form action="/api/templates?token={{ token }}" method="POST"
+                <form action="/api/templates" method="POST"
                     style="margin-top: 10px; display: flex; gap: 10px; max-width: 500px;">
                     <input type="text" name="name" placeholder="Template Name (e.g. 'work')" required
                         style="flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
@@ -223,7 +223,7 @@
         <div class="modal-content">
             <h3>Add New Identity</h3>
             <!-- Updated form to support Xterm Interception -->
-            <form action="/create?token={{ token }}" method="POST" onsubmit="handleCreateSubmit(event)">
+            <form action="/create" method="POST" onsubmit="handleCreateSubmit(event)">
                 <div style="margin-bottom: 10px;">
                     <label>Target Host (user@hostname):</label><br>
                     <input type="text" name="user_host" id="create_user_host" required
@@ -258,7 +258,7 @@
         <div class="modal-content">
             <h3>Deploy Key</h3>
             <p>Deploy key for <strong id="deploy_user"></strong> to host?</p>
-            <form action="/deploy?token={{ token }}" method="POST">
+            <form action="/deploy" method="POST">
                 <input type="hidden" name="uuid" id="deploy_uuid">
                 <input type="hidden" name="user" id="deploy_user_input">
                 <input type="hidden" name="target_host" id="deploy_target_host">
@@ -354,7 +354,7 @@
     <!-- Initialization and External JS -->
     <script>
         window.identitiesList = {{ identities | tojson }};
-        window.authToken = "{{ token }}";
+        window.authToken = ""; // Auth is now handled via HTTP-only cookie
         window.xtermEnabled = {{ 'true' if xterm_enabled else 'false' }};
     </script>
     <script src="/assets/app.js"></script>

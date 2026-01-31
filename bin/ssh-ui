@@ -84,7 +84,8 @@ app.secret_key = SECRET_KEY
 # Initialize SocketIO if available
 socketio = None
 if SOCKETIO_AVAILABLE:
-    socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins='*')
+    # CORS origins will be set at startup once port is known
+    socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins=[])
 
 # Global map for active PTYs: sid -> {fd, pid, ...}
 # Global map for active PTYs: term_id -> {fd, pid, sid, timer}
@@ -211,15 +212,27 @@ def get_templates_list():
     return templates
 
 def check_auth():
-    token = request.args.get('token') or session.get('auth_token')
-    if token == AUTH_TOKEN:
-        if 'auth_token' not in session: session['auth_token'] = token
-        return True
-    return False
+    """Check auth via HTTP-only cookie, or session fallback."""
+    token = request.cookies.get('auth_token') or session.get('auth_token')
+    return token == AUTH_TOKEN
 
 @app.before_request
 def before_request():
     if request.endpoint == 'static' or request.endpoint == 'custom_static': return
+    if request.endpoint == 'favicon' or request.endpoint == 'robots': return
+    # If token is in URL query param, set HTTP-only cookie and redirect to strip it
+    url_token = request.args.get('token')
+    if url_token == AUTH_TOKEN:
+        # Build clean URL without the token param
+        from urllib.parse import urlencode, parse_qs, urlparse, urlunparse
+        parsed = urlparse(request.url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params.pop('token', None)
+        clean_query = urlencode(params, doseq=True)
+        clean_url = urlunparse(parsed._replace(query=clean_query))
+        resp = redirect(clean_url)
+        resp.set_cookie('auth_token', AUTH_TOKEN, httponly=True, samesite='Strict', path='/')
+        return resp
     if not check_auth(): return "Unauthorized: Missing or invalid token", 401
 
 @app.route('/')
@@ -229,10 +242,9 @@ def index():
     result_status = session.pop('last_status', None)
     templates = get_templates_list()
     
-    return render_template('index.html', 
-                           identities=identities, 
+    return render_template('index.html',
+                           identities=identities,
                            templates=templates,
-                           token=AUTH_TOKEN, 
                            result_output=result_output,
                            result_status=result_status,
                            xterm_enabled=SOCKETIO_AVAILABLE)
@@ -302,7 +314,7 @@ def create_identity():
         launch_terminal_script(script_content, f"create_{safe_host}")
         session['last_status'] = 'info'
         session['last_output'] = f"Launched Terminal for: {user_host}..."
-        return redirect(url_for('index', token=AUTH_TOKEN))
+        return redirect(url_for('index'))
     except Exception as e: return f"Launch error: {str(e)}", 500
 
 @app.route('/connect', methods=['POST'])
@@ -330,14 +342,20 @@ def deploy_key():
     password = request.form.get('password')
     if not all([uuid, user, target_host, password]): return "Missing fields", 400
     
+    import re
     safe_uuid = os.path.basename(uuid)
     safe_user = os.path.basename(user)
+    # Validate target_host to prevent command injection
+    if not re.match(r'^[a-zA-Z0-9.\-_@:]+$', target_host):
+        return "Security block: Invalid target host characters.", 400
     identity_pub_path = os.path.join(UUID_DIR, safe_uuid, safe_user, "identity.pub")
     if not os.path.exists(identity_pub_path): return "Identity not found", 404
-    
+
     try:
+        # Escape single quotes in password to prevent shell injection
+        safe_password = password.replace("'", "'\\''")
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as tf:
-            tf.write(f"#!/bin/sh\necho '{password}'\n")
+            tf.write(f"#!/bin/sh\necho '{safe_password}'\n")
             askpass_path = tf.name
         os.chmod(askpass_path, 0o700)
         
@@ -352,7 +370,7 @@ def deploy_key():
         
         session['last_output'] = result.stderr + "\n" + result.stdout
         session['last_status'] = 'success' if result.returncode == 0 else 'error'
-        return redirect(url_for('index', token=AUTH_TOKEN))
+        return redirect(url_for('index'))
     except Exception as e:
         if 'askpass_path' in locals() and os.path.exists(askpass_path): os.unlink(askpass_path)
         return f"Error: {e}", 500
@@ -418,7 +436,7 @@ def create_template():
         key_type = "ed25519"
         key_path = os.path.join(template_path, f"id_{key_type}")
         subprocess.run(['ssh-keygen', '-t', key_type, '-f', key_path, '-N', '', '-C', f"template:{safe_name}"], check=True, capture_output=True)
-        return redirect(url_for('index', token=AUTH_TOKEN, view='templates'))
+        return redirect(url_for('index', view='templates'))
     except Exception as e: return f"Error: {e}", 500
 
 @app.route('/api/templates/<name>', methods=['DELETE'])
@@ -716,8 +734,13 @@ if __name__ == '__main__':
     else:
         print(" -> WebSockets DISABLED (Legacy mode)")
 
+    # Restrict SocketIO CORS to localhost on the actual port
+    if SOCKETIO_AVAILABLE:
+        allowed = [f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"]
+        socketio.server.cors_allowed_origins = allowed
+
     threading.Timer(1.0, open_browser, args=[PORT]).start()
-    
+
     # Update app port
     if SOCKETIO_AVAILABLE:
         socketio.run(app, host=HOST, port=PORT, debug=False)
