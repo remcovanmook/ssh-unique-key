@@ -104,6 +104,21 @@ do_install() {
     find "$SOURCE_DIR" -maxdepth 1 -type f -not -name '.*' -exec cp -f {} "$INSTALL_LIB/" \;
     chmod +x "$INSTALL_LIB"/*
 
+    # Copy lib/ assets (ssh-ui.py, requirements-ui.txt, ui/*)
+    LIB_SRC_DIR="$(dirname "$SOURCE_DIR")/lib"
+    LIB_DEST_DIR="$(dirname "$INSTALL_LIB")/lib"
+    msg "Installing lib assets to $LIB_DEST_DIR..."
+    mkdir -p "$LIB_DEST_DIR"
+    cp -f "$LIB_SRC_DIR/ssh-ui.py" "$LIB_DEST_DIR/"
+    cp -f "$LIB_SRC_DIR/requirements-ui.txt" "$LIB_DEST_DIR/"
+
+    UI_SRC_DIR="$LIB_SRC_DIR/ui"
+    UI_DEST_DIR="$LIB_DEST_DIR/ui"
+    if [ -d "$UI_SRC_DIR" ]; then
+        mkdir -p "$UI_DEST_DIR"
+        find "$UI_SRC_DIR" -maxdepth 1 -type f -exec cp -f {} "$UI_DEST_DIR/" \;
+    fi
+
     # Xterm Asset Logic
     if [ "$INSTALL_XTERM" == "ask" ]; then
         # Check if tty
@@ -128,7 +143,7 @@ do_install() {
     if [ "$INSTALL_XTERM" == "yes" ]; then
         # Download xterm assets
         # Using unpkg @latest and socket.io major version for updates
-        UI_LIB_DIR="$(dirname "$SOURCE_DIR")/lib/ui/xterm"
+        UI_LIB_DIR="$UI_DEST_DIR/xterm"
         
         msg "Setting up xterm assets in $UI_LIB_DIR..."
         mkdir -p "$UI_LIB_DIR"

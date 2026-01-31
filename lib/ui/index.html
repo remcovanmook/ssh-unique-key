@@ -178,16 +178,9 @@
 
         <!-- TEMPLATES VIEW -->
         <div id="view-templates" class="view-section">
-            <h2>Template Management</h2>
-            <div
-                style="background: #fafafa; padding: 15px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 20px;">
-                <strong>Create New Template</strong>
-                <form action="/api/templates" method="POST"
-                    style="margin-top: 10px; display: flex; gap: 10px; max-width: 500px;">
-                    <input type="text" name="name" placeholder="Template Name (e.g. 'work')" required
-                        style="flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
-                    <button type="submit" class="btn btn-blue">Create</button>
-                </form>
+            <div style="display:flex; justify-content: space-between; align-items:center;">
+                <h2>Template Management</h2>
+                <button class="btn btn-blue" onclick="document.getElementById('templateCreateModal').style.display='block'">New Template</button>
             </div>
 
             <div id="templateList">Loading...</div>
@@ -244,6 +237,13 @@
                     <input type="text" name="key_comment" id="create_key_comment" style="width: 100%; padding: 5px;"
                         placeholder="e.g. user@host-date">
                 </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="display:flex; align-items:center; cursor:pointer;">
+                        <input type="checkbox" name="legacy" id="create_legacy" style="margin-right: 8px;">
+                        Enable legacy algorithms (RSA/DSS/CBC)
+                    </label>
+                    <small style="color: #b00; display: block; margin-top: 4px;">Warning: Only use for older devices (e.g. Cisco routers, old Linux) that don't support modern ciphers. Weakens security for this host only.</small>
+                </div>
                 <div style="text-align: right; margin-top: 20px;">
                     <button type="button" class="btn"
                         onclick="document.getElementById('createModal').style.display='none'">Cancel</button>
@@ -289,6 +289,33 @@
                     <button type="button" class="btn"
                         onclick="document.getElementById('connectModal').style.display='none'">Cancel</button>
                     <button type="button" class="btn btn-blue" onclick="triggerConnectSubmit()">Connect</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Template Create Modal -->
+    <div id="templateCreateModal" class="modal">
+        <div class="modal-content">
+            <h3>Create New Template</h3>
+            <form onsubmit="return handleTemplateCreate(event)">
+                <div style="margin-bottom: 10px;">
+                    <label>Template Name:</label><br>
+                    <input type="text" id="tmpl_create_name" required
+                        style="width: 100%; padding: 5px;" placeholder="e.g. work">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label>Key Type:</label><br>
+                    <select id="tmpl_create_type" style="width: 100%; padding: 5px;">
+                        <option value="standard">Standard Key (ed25519)</option>
+                        <option value="sk">Hardware Key (FIDO2/YubiKey)</option>
+                        <option value="opk">OpenPubKey (opkssh)</option>
+                    </select>
+                </div>
+                <div style="text-align: right; margin-top: 20px;">
+                    <button type="button" class="btn"
+                        onclick="document.getElementById('templateCreateModal').style.display='none'">Cancel</button>
+                    <button type="submit" class="btn btn-blue">Create</button>
                 </div>
             </form>
         </div>
