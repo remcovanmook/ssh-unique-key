@@ -2,6 +2,9 @@
 
 Automatically manages unique SSH keypairs per host so you can't be tracked by your public key.
 
+**Important disclaimer**
+This package is in early stages of development, mistakes can and will happen that might interrupt your workflow or weaken your security stance. While to makes every effort to be as transparent and light touch as possible, it still makes changes to one of the most security-sensitive parts of your home directory - your SSH config. Always keep an eye out on what's going on with your SSH sessions. 
+
 ## The Problem
 
 Most people use a single SSH keypair across all their servers. That public key becomes a global identifier — it sits in `authorized_keys` on every host you access. Anyone who compromises one server (or has legitimate access to it) can take your public key and:
