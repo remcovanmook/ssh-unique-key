@@ -65,6 +65,11 @@ h2 {
     color: #555;
     border-radius: 4px;
     margin-right: 5px;
+    /* Reset browser button defaults so <button> renders like the previous <div> */
+    background: none;
+    border: none;
+    font: inherit;
+    line-height: inherit;
 }
 
 .nav-item:hover {

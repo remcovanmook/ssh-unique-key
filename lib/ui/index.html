@@ -28,9 +28,9 @@
         </div>
 
         <div class="nav-bar">
-            <div class="nav-item active" role="button" tabindex="0" onclick="switchView('dashboard')" onkeydown="if(event.key==='Enter'||event.key===' ')switchView('dashboard')" id="nav-dashboard">Dashboard</div>
-            <div class="nav-item" role="button" tabindex="0" onclick="switchView('templates')" onkeydown="if(event.key==='Enter'||event.key===' ')switchView('templates')" id="nav-templates">Templates</div>
-            <div class="nav-item" role="button" tabindex="0" onclick="switchView('history')" onkeydown="if(event.key==='Enter'||event.key===' ')switchView('history')" id="nav-history">History</div>
+            <button class="nav-item active" onclick="switchView('dashboard')" id="nav-dashboard">Dashboard</button>
+            <button class="nav-item" onclick="switchView('templates')" id="nav-templates">Templates</button>
+            <button class="nav-item" onclick="switchView('history')" id="nav-history">History</button>
 
             <div class="nav-right">
                 <a href="/logout" class="btn" style="background-color: #666; color: white;">Logout</a>
@@ -38,7 +38,7 @@
         </div>
 
         {% if get_flashed_messages() %}
-        <div style="background-color: #ffcccc; color: #cc0000; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
+        <div style="background-color: #f5c6c6; color: #7a0000; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
             {{ get_flashed_messages()[0] }}
         </div>
         {% endif %}
@@ -385,12 +385,6 @@
     {% endif %}
 
     <!-- Initialization and External JS -->
-    <!--
-        Template data is passed via a JSON data island (<script type="application/json">)
-        rather than inline JS assignments, to avoid IDE false-positive parse errors caused
-        by Jinja2 double-brace syntax being misread as JS object literals.
-        app.js reads these at startup via initFromDataIsland().
-    -->
     <script type="application/json" id="app-data">
         {
             "identities": {{ identities | tojson }},
