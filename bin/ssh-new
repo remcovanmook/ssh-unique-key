@@ -90,6 +90,9 @@ if [ -d "$CANONICAL" ]; then
         err "SECURITY WARNING: Host keys have changed! Possible MITM."
     else
         info "Host verification passed."
+        # Keys verified identical; refresh the (informational) hostname column
+        # so known_host_keys can pin connections to the current target name.
+        echo "$SCAN_SORTED" > "$CANONICAL/known_host_keys"
     fi
 else
     info "Creating new identity..."
@@ -244,7 +247,7 @@ chmod 600 "$TRUSTED_CONF"
 if [ "$NO_CONNECT" -eq 0 ]; then
     if [ -f "$KEY_FILE.pub" ]; then
         info "Copying key..."
-        ssh-copy-id -i "$KEY_FILE.pub" -o StrictHostKeyChecking=accept-new "$USER_HOST_ARG"
+        ssh-copy-id -i "$KEY_FILE.pub" -o UserKnownHostsFile="$CANONICAL/known_host_keys" -o StrictHostKeyChecking=yes "$USER_HOST_ARG"
     else
         if [ -f "$KEY_FILE-cert.pub" ]; then
              warn "Certificate found. Assuming server trusts CA. Skipping copy."
@@ -288,4 +291,4 @@ if [ "$NO_CONNECT" -eq 1 ]; then
 fi
 
 info "Connecting..."
-exec ssh "$USER_HOST_ARG"
+exec ssh -o UserKnownHostsFile="$CANONICAL/known_host_keys" -o StrictHostKeyChecking=yes "$USER_HOST_ARG"
