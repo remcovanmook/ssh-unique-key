@@ -4,18 +4,15 @@ at install time or runtime; integrity is enforced by SHA384SUMS
 
 Current contents
 ----------------
-xterm-5.3.0.js            xterm.js, legacy unscoped npm package `xterm`
-xterm-5.3.0.css           (frozen at 5.3.0 since 2023)
-xterm-addon-fit-0.8.0.js  legacy unscoped `xterm-addon-fit` (frozen at 0.8.0)
+xterm-5.5.0.js             @xterm/xterm@5.5.0 (lib/xterm.js)
+xterm-5.5.0.css            @xterm/xterm@5.5.0 (css/xterm.css)
+xterm-addon-fit-0.10.0.js  @xterm/addon-fit@0.10.0 (lib/addon-fit.js)
 
-Provenance: these bytes were fetched from unpkg.com by the pre-refactor
-install.sh (`xterm@latest` / `xterm-addon-fit@latest`) on 2026-01-31 and
-have been serving the local web UI since. Versions are inferred from the
-frozen legacy packages, not verified against npm — run
-`scripts/vendor-update` to replace them with pinned, dual-CDN
-cross-checked @xterm/xterm@5.5.0 + @xterm/addon-fit@0.10.0 (the
-REFACTOR.md Phase 0 target), then update index.html references and this
-file in the same commit.
+Provenance: fetched 2026-07-16 by `scripts/vendor-update` — pinned
+versions, accepted only after unpkg.com and cdn.jsdelivr.net served
+byte-identical copies (SHA-384 cross-check). This replaced the interim
+2026-01-31 `xterm@latest` snapshots (5.3.0-era legacy packages) that were
+vendored from the pre-refactor local install.
 
 Bumping a vendored file
 -----------------------
