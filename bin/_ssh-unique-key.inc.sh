@@ -92,7 +92,9 @@ get_full_host_scan() {
 get_host_uuid_from_scan_data() {
     local DATA="$1"
     local BEST_KEY
-    BEST_KEY=$(echo "$DATA" | awk '/ssh-ed25519/{k=$3} /ecdsa/{if(!k)k=$3} /ssh-rsa/{if(!k)k=$3} END{print k}')
+    # Hash "<type> <base64>" — hostname column excluded so the identity is
+    # derived purely from key material (stable across hostname/IP changes).
+    BEST_KEY=$(echo "$DATA" | awk '/ssh-ed25519/{k=$2" "$3} /ecdsa/{if(!k)k=$2" "$3} /ssh-rsa/{if(!k)k=$2" "$3} END{print k}')
     if [ -z "$BEST_KEY" ]; then err "No usable key found in scan data."; fi
     
     local HASH
