@@ -1,8 +1,8 @@
 #!/bin/bash
-# Stub. The original ssh-template-rotate referenced helpers that were never
-# defined (validate_template, get_hosts_using_template, log) and was
-# unrunnable as shipped (ARCHITECTURE.md W9). Rather than ship broken code,
-# it is disabled until it is rebuilt from scratch in REFACTOR.md Phase 5.
+# Stub. The original ssh-template-rotate called helper functions that were
+# never defined anywhere and was unrunnable as shipped (ARCHITECTURE.md W9
+# lists them). Rather than ship broken code, it is disabled until it is
+# rebuilt from scratch in REFACTOR.md Phase 5.
 set -e
 echo "ssh-template-rotate is not available: the shipped implementation was" >&2
 echo "broken and has been removed. It will be rebuilt in refactor Phase 5" >&2
