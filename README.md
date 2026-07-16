@@ -30,11 +30,11 @@ This installs commands to `~/bin` (ensure it's in your `$PATH`) and stores key d
 
 Options:
 
-- `./install.sh --install-xterm` — include xterm.js assets for the web UI terminal
-- `./install.sh --skip-xterm` — skip xterm.js assets
 - `./install.sh uninstall` — remove all symlinks and installed files
 
-The web UI requires Python 3. Dependencies are installed automatically in a virtual environment on first run of `ssh-ui`.
+The installer performs **no network fetches**: all web-UI assets (xterm.js) are vendored in the repo under `lib/ui/vendor/` with SHA-384 hashes recorded in `SHA384SUMS` and verified by `scripts/check vendor`.
+
+The web UI requires Python 3. Dependencies are installed automatically in a virtual environment on first run of `ssh-ui` (this dependency goes away in refactor Phase 1 — see [REFACTOR.md](REFACTOR.md)).
 
 ## Quick Start
 
@@ -78,9 +78,9 @@ Enables deprecated algorithms (DSA, RSA-SHA1, CBC ciphers) only for that specifi
 | `ssh-del` | Remove keys for a user. Cleans up the host identity if no users remain. |
 | `ssh-conf` | Edit host-specific SSH options (Port, Forwarding, etc.). |
 | `ssh-template` | Manage key templates (standard, hardware, or OpenPubKey). |
-| `ssh-rotate` | Rotate host keys when a server's host key changes. |
+| `ssh-rotate` | *Disabled* — the shipped implementation was broken; rebuilt in refactor Phase 5. |
 | `ssh-user-rotate` | Rotate a user's keypair for a specific host. |
-| `ssh-template-rotate` | Rotate keys within a template (ed25519, ecdsa, or rsa). |
+| `ssh-template-rotate` | *Disabled* — the shipped implementation was broken; rebuilt in refactor Phase 5. |
 | `ssh-backup` | Create an encrypted archive of the key store. |
 | `ssh-restore` | Restore keys from a backup archive. |
 | `ssh-history` | View the operations log. |
@@ -99,10 +99,10 @@ Starts a local web server on a random port (localhost only). A URL with a one-ti
 Features:
 
 - **Dashboard** — overview of all host identities, their users, and keys. Connect, rotate, or delete directly from the browser.
-- **Templates** — create and manage key templates. Hardware key enrollment and opkssh login run in an embedded terminal (xterm.js over websockets).
+- **Templates** — create and manage key templates.
 - **History** — searchable log of all operations.
 
-The terminal integration handles interactive workflows (YubiKey touch prompts, OIDC browser login for opkssh) that would otherwise require the CLI.
+The embedded xterm.js terminal (hardware key enrollment, opkssh login flows) is **temporarily disabled**: socket.io-client is no longer shipped, and the terminal returns in refactor Phase 1 on a hand-rolled WebSocket ([REFACTOR.md](REFACTOR.md)). Interactive flows fall back to plain form submissions or the CLI until then.
 
 ## Architecture
 
@@ -159,6 +159,14 @@ The `--legacy` flag injects deprecated algorithms only into the specific host's 
 
 - `generate-sk` creates FIDO2/U2F-backed keys (`ed25519-sk`) requiring physical touch.
 - `generate-opk` integrates with OpenPubKey via opkssh. `ssh-new` validates certificates and triggers `opkssh login` (with optional issuer) when sessions expire, verifying the credential was updated before connecting.
+
+## Development
+
+Design and threat model live in [ARCHITECTURE.md](ARCHITECTURE.md); the phased refactor plan in [REFACTOR.md](REFACTOR.md).
+
+- `scripts/check` — run all local validation (or a stage: `syntax`, `lint`, `vendor`, `tests`, `secrets`). CI runs exactly this script.
+- `scripts/install-hooks` — opt-in pre-push hook that runs `scripts/check`.
+- `scripts/vendor-update` — the only sanctioned way to bump vendored JS: fetches pinned versions, cross-checks two CDNs byte-for-byte, rewrites `lib/ui/vendor/SHA384SUMS`. See `lib/ui/vendor/PROVENANCE`.
 
 ## License
 
