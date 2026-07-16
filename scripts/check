@@ -1,0 +1,51 @@
+#!/bin/bash
+# Single local validation entry point (REFACTOR.md Phase 0).
+#
+#   scripts/check                # run all stages
+#   scripts/check <stage>...     # run selected stages: syntax lint vendor tests secrets
+#
+# Used by developers, by the opt-in pre-push hook (scripts/install-hooks),
+# and by CI (.github/workflows/check.yml) as a thin wrapper. Stage modules
+# live in scripts/check.d/<stage>.sh and follow this contract:
+#   exit 0  = pass (a stage that [SKIP]s missing optional tools still passes)
+#   exit >0 = fail
+# Required tools: bash, python3, shasum/sha384sum. Optional: shellcheck, ruff, bats.
+set -u
+
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+CHECK_D="$REPO_ROOT/scripts/check.d"
+export REPO_ROOT
+
+ALL_STAGES=(syntax lint vendor tests secrets)
+
+if [ $# -gt 0 ]; then
+    STAGES=("$@")
+else
+    STAGES=("${ALL_STAGES[@]}")
+fi
+
+for cmd in bash python3; do
+    command -v "$cmd" >/dev/null || { echo "[FAIL] required tool '$cmd' not installed" >&2; exit 1; }
+done
+if ! command -v shasum >/dev/null && ! command -v sha384sum >/dev/null; then
+    echo "[FAIL] required tool 'shasum' or 'sha384sum' not installed" >&2
+    exit 1
+fi
+
+FAILED=0
+for stage in "${STAGES[@]}"; do
+    module="$CHECK_D/$stage.sh"
+    if [ ! -f "$module" ]; then
+        echo "[FAIL] unknown stage '$stage' (available: ${ALL_STAGES[*]})" >&2
+        exit 1
+    fi
+    echo "=== $stage ==="
+    if bash "$module"; then
+        echo "[PASS] $stage"
+    else
+        echo "[FAIL] $stage" >&2
+        FAILED=1
+    fi
+done
+
+exit "$FAILED"
