@@ -8,6 +8,14 @@ Issues are referenced by the `W#` IDs from [ARCHITECTURE.md §2 and §4](ARCHITE
 
 ## Phase 0 — Stop the bleeding, vendor JS, local check script (~1 week)
 
+> **Status: COMPLETE (2026-07-16, branch `refactor/phase-0`).** All exit-gate
+> checks pass. Two notes: (1) the vendored xterm files are the
+> locally-installed 5.3.0-provenance snapshots, not the 5.5.0 target —
+> run `scripts/vendor-update` (deliberate, human-run network fetch with
+> dual-CDN cross-check) to pin 5.5.0, then update index.html + PROVENANCE;
+> (2) task 6's regression test is a plain-bash `tests/bash/test_*.sh`
+> (always runs, even without bats); the bats suite proper arrives in Phase 5.
+
 **Goal:** the repo no longer ships broken code or fetches code from the internet at install time. A single local check script is the validation entry point — used by developers, by a pre-push hook, and (later) by CI as a thin wrapper.
 
 ### Tasks (Phase 0)
