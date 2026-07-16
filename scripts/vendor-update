@@ -1,0 +1,73 @@
+#!/bin/bash
+# Fetch pinned versions of the vendored web-UI assets, cross-check the bytes
+# against two independent CDNs, and rewrite lib/ui/vendor/SHA384SUMS.
+#
+# This is the ONLY sanctioned way network-fetched code enters the repo, and it
+# is run deliberately by a human — never by install.sh, never at runtime.
+# After running: review the diff, update lib/ui/index.html asset references
+# and lib/ui/vendor/PROVENANCE, and commit everything together.
+set -euo pipefail
+
+XTERM_VERSION="5.5.0"
+FIT_VERSION="0.10.0"
+
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+VENDOR_DIR="$REPO_ROOT/lib/ui/vendor"
+
+err() { echo "[ERROR] $*" >&2; exit 1; }
+msg() { echo "[+] $*"; }
+
+command -v curl >/dev/null || err "curl is required."
+if command -v shasum >/dev/null; then
+    sha384() { shasum -a 384 "$1" | awk '{print $1}'; }
+elif command -v sha384sum >/dev/null; then
+    sha384() { sha384sum "$1" | awk '{print $1}'; }
+else
+    err "Need shasum or sha384sum."
+fi
+
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+# fetch <npm-path> <dest-basename>
+# Downloads the same pinned file from unpkg and jsdelivr; the two copies must
+# be byte-identical before it is accepted.
+fetch() {
+    local npm_path="$1" dest="$2"
+    msg "Fetching $npm_path (pinned) from two CDNs..."
+    curl -fsSL -o "$WORK_DIR/a" "https://unpkg.com/$npm_path"
+    curl -fsSL -o "$WORK_DIR/b" "https://cdn.jsdelivr.net/npm/$npm_path"
+    local ha hb
+    ha=$(sha384 "$WORK_DIR/a")
+    hb=$(sha384 "$WORK_DIR/b")
+    if [ "$ha" != "$hb" ]; then
+        err "CDN cross-check MISMATCH for $npm_path — refusing to vendor. unpkg=$ha jsdelivr=$hb"
+    fi
+    mv "$WORK_DIR/a" "$VENDOR_DIR/$dest"
+    msg "  OK $dest ($ha)"
+}
+
+mkdir -p "$VENDOR_DIR"
+
+fetch "@xterm/xterm@${XTERM_VERSION}/lib/xterm.js"          "xterm-${XTERM_VERSION}.js"
+fetch "@xterm/xterm@${XTERM_VERSION}/css/xterm.css"         "xterm-${XTERM_VERSION}.css"
+fetch "@xterm/addon-fit@${FIT_VERSION}/lib/addon-fit.js"    "xterm-addon-fit-${FIT_VERSION}.js"
+
+msg "Rewriting SHA384SUMS..."
+(
+    cd "$VENDOR_DIR"
+    shopt -s nullglob
+    files=(*.js *.css)
+    [ ${#files[@]} -gt 0 ] || err "No vendored files found."
+    if command -v shasum >/dev/null; then
+        shasum -a 384 "${files[@]}" > SHA384SUMS
+    else
+        sha384sum "${files[@]}" > SHA384SUMS
+    fi
+)
+
+msg "Done. Now:"
+msg "  1. Remove any superseded xterm-*.js/.css versions from $VENDOR_DIR (and rerun the SHA384SUMS step)."
+msg "  2. Update asset references in lib/ui/index.html."
+msg "  3. Update lib/ui/vendor/PROVENANCE."
+msg "  4. Review the diff and commit everything in one commit."

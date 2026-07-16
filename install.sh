@@ -7,15 +7,12 @@ KEYS_DIR="${HOME}/.ssh/unique_keys"
 INSTALL_LIB="${KEYS_DIR}/bin"
 
 # Defaults
-INSTALL_XTERM="ask"
 MODE="install"
 
 usage() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --install-xterm    Force installation of xterm.js assets."
-    echo "  --skip-xterm       Skip installation of xterm.js assets."
     echo "  uninstall          Uninstall the tool (removes symlinks and bin dir)."
     echo "  -h, --help         Show this help message."
     echo ""
@@ -26,14 +23,6 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         uninstall)
             MODE="uninstall"
-            shift
-            ;;
-        --install-xterm)
-            INSTALL_XTERM="yes"
-            shift
-            ;;
-        --skip-xterm)
-            INSTALL_XTERM="no"
             shift
             ;;
         -h|--help)
@@ -119,59 +108,14 @@ do_install() {
         find "$UI_SRC_DIR" -maxdepth 1 -type f -exec cp -f {} "$UI_DEST_DIR/" \;
     fi
 
-    # Xterm Asset Logic
-    if [ "$INSTALL_XTERM" == "ask" ]; then
-        # Check if tty
-        if [ -t 0 ]; then
-            exec < /dev/tty
-            read -p "Install xterm.js features (web terminal)? [Y/n] " response
-            case "$response" in
-                [yY]|[yY][eE][sS]|"") INSTALL_XTERM="yes" ;;
-                *) INSTALL_XTERM="no" ;;
-            esac
-        else
-            # Default to yes if non-interactive but not explicitly skipped?
-            # Or default to no for safety?
-            # User said "default is interactive", implying manual run. 
-            # If scripts run this, they should use flags.
-            # Let's default to yes if not specified in non-interactive for backward compat
-            INSTALL_XTERM="yes"
-            warn "Non-interactive mode detected. Defaulting to installing xterm.js."
-        fi
+    # Vendored web-UI assets (xterm.js). No network fetch: every byte the UI
+    # serves is committed to the repo and hash-pinned in lib/ui/vendor/SHA384SUMS.
+    VENDOR_SRC_DIR="$UI_SRC_DIR/vendor"
+    if [ -d "$VENDOR_SRC_DIR" ]; then
+        msg "Installing vendored UI assets..."
+        mkdir -p "$UI_DEST_DIR/vendor"
+        find "$VENDOR_SRC_DIR" -maxdepth 1 -type f -exec cp -f {} "$UI_DEST_DIR/vendor/" \;
     fi
-
-    if [ "$INSTALL_XTERM" == "yes" ]; then
-        # Download xterm assets
-        # Using unpkg @latest and socket.io major version for updates
-        UI_LIB_DIR="$UI_DEST_DIR/xterm"
-        
-        msg "Setting up xterm assets in $UI_LIB_DIR..."
-        mkdir -p "$UI_LIB_DIR"
-        
-        # Download helper
-        download_latest() {
-            local url="$1"
-            local dest="$2"
-            
-            msg "Downloading $(basename "$dest")..."
-            if command -v curl &>/dev/null; then
-                curl -L -s -o "$dest" "$url"
-            elif command -v wget &>/dev/null; then
-                wget -q -O "$dest" "$url"
-            else
-                warn "Could not download $(basename "$dest"): No curl or wget found."
-            fi
-        }
-
-        download_latest "https://unpkg.com/xterm@latest/lib/xterm.js" "$UI_LIB_DIR/xterm.js"
-        download_latest "https://unpkg.com/xterm@latest/css/xterm.css" "$UI_LIB_DIR/xterm.css"
-        download_latest "https://unpkg.com/xterm-addon-fit@latest/lib/xterm-addon-fit.js" "$UI_LIB_DIR/xterm-addon-fit.js"
-        # Using socket.io-client@4 from unpkg for dynamic 4.x updates
-        download_latest "https://unpkg.com/socket.io-client@4/dist/socket.io.js" "$UI_LIB_DIR/socket.io.js"
-    else
-        msg "Skipping xterm.js assets."
-    fi
-
 
     msg "Linking scripts to PATH ($TARGET_DIR)..."
     mkdir -p "$TARGET_DIR"

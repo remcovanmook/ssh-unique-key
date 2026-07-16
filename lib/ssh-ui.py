@@ -255,7 +255,12 @@ def index():
                            templates=templates,
                            result_output=result_output,
                            result_status=result_status,
-                           xterm_enabled=SOCKETIO_AVAILABLE)
+                           # Web terminal disabled until Phase 1: socket.io-client
+                           # is no longer shipped (vendored assets only; see
+                           # lib/ui/vendor/PROVENANCE). The Phase 1 stdlib rewrite
+                           # re-enables it over a native WebSocket. Non-terminal
+                           # flows fall back to plain form POSTs in app.js.
+                           xterm_enabled=False)
 
 # --- Legacy Terminal Launch (External) ---
 def launch_terminal_script(script_content, base_name):
