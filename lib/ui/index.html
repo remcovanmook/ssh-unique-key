@@ -9,10 +9,9 @@
     <link rel="stylesheet" href="/assets/style.css">
 
     {% if xterm_enabled %}
-    <link rel="stylesheet" href="/assets/xterm/xterm.css" />
-    <script src="/assets/xterm/xterm.js"></script>
-    <script src="/assets/xterm/xterm-addon-fit.js"></script>
-    <script src="/assets/xterm/socket.io.js"></script>
+    <link rel="stylesheet" href="/assets/vendor/xterm-5.5.0.css" />
+    <script src="/assets/vendor/xterm-5.5.0.js"></script>
+    <script src="/assets/vendor/xterm-addon-fit-0.10.0.js"></script>
     {% endif %}
 </head>
 
@@ -28,9 +27,9 @@
         </div>
 
         <div class="nav-bar">
-            <div class="nav-item active" onclick="switchView('dashboard')" id="nav-dashboard">Dashboard</div>
-            <div class="nav-item" onclick="switchView('templates')" id="nav-templates">Templates</div>
-            <div class="nav-item" onclick="switchView('history')" id="nav-history">History</div>
+            <button class="nav-item active" onclick="switchView('dashboard')" id="nav-dashboard">Dashboard</button>
+            <button class="nav-item" onclick="switchView('templates')" id="nav-templates">Templates</button>
+            <button class="nav-item" onclick="switchView('history')" id="nav-history">History</button>
 
             <div class="nav-right">
                 <a href="/logout" class="btn" style="background-color: #666; color: white;">Logout</a>
@@ -38,7 +37,7 @@
         </div>
 
         {% if get_flashed_messages() %}
-        <div style="background-color: #ffcccc; color: #cc0000; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
+        <div style="background-color: #f5c6c6; color: #7a0000; padding: 10px; border-radius: 4px; margin-bottom: 20px;">
             {{ get_flashed_messages()[0] }}
         </div>
         {% endif %}
@@ -53,10 +52,10 @@
             <table class="table" style="margin-top:0;">
                 <thead>
                     <tr>
-                        <th width="30%">Host</th>
-                        <th width="35%">Users</th>
-                        <th width="25%">Our Key</th>
-                        <th width="10%">Actions</th>
+                        <th style="width:30%">Host</th>
+                        <th style="width:35%">Users</th>
+                        <th style="width:25%">Our Key</th>
+                        <th style="width:10%">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -200,7 +199,7 @@
                             <th>User</th>
                             <th>Action</th>
                             <th>Target</th>
-                            <th width="40%">Details</th>
+                            <th style="width:40%">Details</th>
                         </tr>
                     </thead>
                     <tbody id="historyList"></tbody>
@@ -218,12 +217,12 @@
             <!-- Updated form to support Xterm Interception -->
             <form action="/create" method="POST" onsubmit="handleCreateSubmit(event)">
                 <div style="margin-bottom: 10px;">
-                    <label>Target Host (user@hostname):</label><br>
+                    <label for="create_user_host">Target Host (user@hostname):</label><br>
                     <input type="text" name="user_host" id="create_user_host" required
                         style="width: 100%; padding: 5px;" placeholder="root@192.168.1.10">
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label>Template:</label><br>
+                    <label for="create_template_select">Template:</label><br>
                     <select name="template" id="create_template_select" style="width: 100%; padding: 5px;"
                         onchange="toggleKeyComment()">
                         <option value="none">None (Auto-detect Key Type)</option>
@@ -233,7 +232,7 @@
                     </select>
                 </div>
                 <div style="margin-bottom: 10px;" id="create_key_comment_div">
-                    <label>Key Comment (Public Key Description):</label><br>
+                    <label for="create_key_comment">Key Comment (Public Key Description):</label><br>
                     <input type="text" name="key_comment" id="create_key_comment" style="width: 100%; padding: 5px;"
                         placeholder="e.g. user@host-date">
                 </div>
@@ -263,8 +262,8 @@
                 <input type="hidden" name="user" id="deploy_user_input">
                 <input type="hidden" name="target_host" id="deploy_target_host">
                 <div style="margin-bottom: 10px;">
-                    <label>Password (if needed):</label>
-                    <input type="password" name="password" style="width: 100%; padding: 5px;">
+                    <label for="deploy_password">Password (if needed):</label>
+                    <input type="password" name="password" id="deploy_password" style="width: 100%; padding: 5px;">
                 </div>
                 <div style="text-align: right;">
                     <button type="button" class="btn"
@@ -300,12 +299,12 @@
             <h3>Create New Template</h3>
             <form onsubmit="return handleTemplateCreate(event)">
                 <div style="margin-bottom: 10px;">
-                    <label>Template Name:</label><br>
+                    <label for="tmpl_create_name">Template Name:</label><br>
                     <input type="text" id="tmpl_create_name" required
                         style="width: 100%; padding: 5px;" placeholder="e.g. work">
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label>Key Type:</label><br>
+                    <label for="tmpl_create_type">Key Type:</label><br>
                     <select id="tmpl_create_type" style="width: 100%; padding: 5px;">
                         <option value="standard">Standard Key (ed25519)</option>
                         <option value="sk">Hardware Key (FIDO2/YubiKey)</option>
@@ -351,6 +350,12 @@
                 <strong>Known Host Keys:</strong>
                 <div style="max-height: 200px; overflow-y: auto; background: #fafafa; border: 1px solid #ddd;">
                     <table class="table" style="margin:0; font-size: 0.9em;">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Fingerprint</th>
+                            </tr>
+                        </thead>
                         <tbody id="info_host_keys_body"></tbody>
                     </table>
                 </div>
@@ -379,10 +384,11 @@
     {% endif %}
 
     <!-- Initialization and External JS -->
-    <script>
-        window.identitiesList = {{ identities | tojson }};
-        window.authToken = ""; // Auth is now handled via HTTP-only cookie
-        window.xtermEnabled = {{ 'true' if xterm_enabled else 'false' }};
+    <script type="application/json" id="app-data">
+        {
+            "identities": {{ identities | tojson }},
+            "xtermEnabled": {{ 'true' if xterm_enabled else 'false' }}
+        }
     </script>
     <script src="/assets/app.js"></script>
 </body>

@@ -53,11 +53,21 @@ fi
 
 info "Rotating key for user '$USER_NAME' on host '$TARGET_HOST' (UUID: $UUID)..."
 
+# --- Pin all connections to the stored host keys ---
+# The hostname column in known_host_keys holds the last-provisioned alias,
+# which may differ from the by-host alias we resolved; rewrite it so the
+# pinned lookup matches the name we connect to.
+KNOWN_KEYS="$UUID_PATH/known_host_keys"
+if [ ! -f "$KNOWN_KEYS" ]; then err "Stored host keys not found: $KNOWN_KEYS"; fi
+PIN_FILE=$(mktemp)
+awk -v h="$TARGET_HOST" '{$1=h; print}' "$KNOWN_KEYS" > "$PIN_FILE"
+PIN_OPTS=(-o "UserKnownHostsFile=$PIN_FILE" -o "StrictHostKeyChecking=yes")
+
 # --- 1. Generate New Key ---
 info "Generating new key..."
 NEW_KEY_TEMP=$(mktemp)
 NEW_KEY_PUB_TEMP="${NEW_KEY_TEMP}.pub"
-trap 'rm -f "$NEW_KEY_TEMP" "$NEW_KEY_PUB_TEMP"' EXIT
+trap 'rm -f "$NEW_KEY_TEMP" "$NEW_KEY_PUB_TEMP" "$PIN_FILE"' EXIT
 
 # Detect type from old key or default to ed25519
 # We'll just use ed25519 for rotation unless legacy flag passed?
@@ -67,15 +77,14 @@ ssh-keygen -t ed25519 -f "$NEW_KEY_TEMP" -N "" -C "$USER_NAME@$TARGET_HOST-rotat
 # --- 2. Install New Key ---
 info "Installing new key to remote host..."
 # Use the OLD key to install the NEW key
-# strict host key checking accept-new to be safe
 export SSH_ASKPASS_REQUIRE=force # Ensure no prompt
-if ! ssh-copy-id -i "$NEW_KEY_PUB_TEMP" -o IdentityFile="$OLD_KEY" -o StrictHostKeyChecking=accept-new "$USER_NAME@$TARGET_HOST"; then
+if ! ssh-copy-id -i "$NEW_KEY_PUB_TEMP" -o IdentityFile="$OLD_KEY" "${PIN_OPTS[@]}" "$USER_NAME@$TARGET_HOST"; then
     err "Failed to install new key on remote host."
 fi
 
 # --- 3. Test New Key ---
 info "Verifying new key connection..."
-if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 "$USER_NAME@$TARGET_HOST" "echo Connection Verified"; then
+if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes "${PIN_OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=10 "$USER_NAME@$TARGET_HOST" "echo Connection Verified"; then
     err "New key validation failed! Aborting rotation."
 fi
 
@@ -91,7 +100,7 @@ OLD_PUB_CONTENT=$(cat "$OLD_KEY_PUB" | awk '{print $2}')
 SAFE_BLOB=$(echo "$OLD_PUB_CONTENT" | sed 's/\//\\\//g')
 
 CMD="sed -i.bak '/$SAFE_BLOB/d' ~/.ssh/authorized_keys && rm -f ~/.ssh/authorized_keys.bak"
-if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$USER_NAME@$TARGET_HOST" "$CMD"; then
+if ! ssh -i "$NEW_KEY_TEMP" -o IdentitiesOnly=yes "${PIN_OPTS[@]}" "$USER_NAME@$TARGET_HOST" "$CMD"; then
     warn "Failed to remove old key from remote host. It might remain authorize but local key will be replaced."
 fi
 

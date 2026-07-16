@@ -1,0 +1,26 @@
+Vendored third-party JavaScript/CSS. No file in this directory is fetched
+at install time or runtime; integrity is enforced by SHA384SUMS
+(verified by `scripts/check vendor` locally and in CI).
+
+Current contents
+----------------
+xterm-5.5.0.js             @xterm/xterm@5.5.0 (lib/xterm.js)
+xterm-5.5.0.css            @xterm/xterm@5.5.0 (css/xterm.css)
+xterm-addon-fit-0.10.0.js  @xterm/addon-fit@0.10.0 (lib/addon-fit.js)
+
+Provenance: fetched 2026-07-16 by `scripts/vendor-update` — pinned
+versions, accepted only after unpkg.com and cdn.jsdelivr.net served
+byte-identical copies (SHA-384 cross-check). This replaced the interim
+2026-01-31 `xterm@latest` snapshots (5.3.0-era legacy packages) that were
+vendored from the pre-refactor local install.
+
+Bumping a vendored file
+-----------------------
+1. Run `scripts/vendor-update` (or fetch the pinned file yourself).
+2. Update SHA384SUMS in the same commit (`cd lib/ui/vendor && shasum -a 384 <files> > SHA384SUMS`).
+3. Update references in lib/ui/index.html.
+4. The diff — file rename + hash change — is reviewed like any other code.
+
+socket.io-client is deliberately NOT vendored: Phase 1 replaces
+flask_socketio with a hand-rolled RFC 6455 WebSocket and the client uses
+the browser-native WebSocket API (see ARCHITECTURE.md §8).

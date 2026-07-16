@@ -1,0 +1,21 @@
+# Thin wrapper: install the optional lint/test tools and run scripts/check.
+# No duplicated lint logic in YAML — anyone can run the same script locally
+# and get the same result.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install optional tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats
+          pipx install ruff
+      - name: Run checks
+        run: scripts/check

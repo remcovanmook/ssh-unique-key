@@ -11,7 +11,6 @@ usage() {
     echo "  --template <name>   Use a key template"
     echo "  --legacy            Enable outdated algorithms (rsa/dss/cbc)"
     echo "  --comment \"text\"    Display this message BEFORE connecting"
-    echo "  --comment \"text\"    Display this message BEFORE connecting"
     echo "  --key-comment \"text\"  Set the public key comment (description)"
     echo "  -V, --verbose       Enable verbose output"
     echo "  -h, --help          Show this help message"
@@ -21,8 +20,6 @@ usage() {
 
 TEMPLATE_NAME=""
 LEGACY_MODE=0
-NO_CONNECT=0
-COMMENT_TEXT=""
 NO_CONNECT=0
 COMMENT_TEXT=""
 KEY_COMMENT=""
@@ -36,7 +33,6 @@ while [[ $# -gt 0 ]]; do
         --template) TEMPLATE_NAME="$2"; shift 2 ;;
         --legacy) LEGACY_MODE=1; shift ;;
         --no-connect) NO_CONNECT=1; shift ;;
-        --comment) COMMENT_TEXT="$2"; shift 2 ;;
         --comment) COMMENT_TEXT="$2"; shift 2 ;;
         --key-comment) KEY_COMMENT="$2"; shift 2 ;;
         -*|--*) err "Unknown option $1"; usage ;;
@@ -90,6 +86,9 @@ if [ -d "$CANONICAL" ]; then
         err "SECURITY WARNING: Host keys have changed! Possible MITM."
     else
         info "Host verification passed."
+        # Keys verified identical; refresh the (informational) hostname column
+        # so known_host_keys can pin connections to the current target name.
+        echo "$SCAN_SORTED" > "$CANONICAL/known_host_keys"
     fi
 else
     info "Creating new identity..."
@@ -244,7 +243,7 @@ chmod 600 "$TRUSTED_CONF"
 if [ "$NO_CONNECT" -eq 0 ]; then
     if [ -f "$KEY_FILE.pub" ]; then
         info "Copying key..."
-        ssh-copy-id -i "$KEY_FILE.pub" -o StrictHostKeyChecking=accept-new "$USER_HOST_ARG"
+        ssh-copy-id -i "$KEY_FILE.pub" -o UserKnownHostsFile="$CANONICAL/known_host_keys" -o StrictHostKeyChecking=yes "$USER_HOST_ARG"
     else
         if [ -f "$KEY_FILE-cert.pub" ]; then
              warn "Certificate found. Assuming server trusts CA. Skipping copy."
@@ -288,4 +287,4 @@ if [ "$NO_CONNECT" -eq 1 ]; then
 fi
 
 info "Connecting..."
-exec ssh "$USER_HOST_ARG"
+exec ssh -o UserKnownHostsFile="$CANONICAL/known_host_keys" -o StrictHostKeyChecking=yes "$USER_HOST_ARG"

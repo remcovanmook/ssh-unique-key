@@ -1,0 +1,20 @@
+#!/bin/bash
+# Opt-in: install a pre-push hook that runs scripts/check.
+# Never run automatically — invoke this yourself if you want the gate.
+set -euo pipefail
+
+HOOK_DIR=$(git rev-parse --git-path hooks)
+HOOK="$HOOK_DIR/pre-push"
+
+if [ -e "$HOOK" ] && ! grep -q "scripts/check" "$HOOK"; then
+    echo "[ERROR] $HOOK already exists and is not ours — not overwriting." >&2
+    exit 1
+fi
+
+mkdir -p "$HOOK_DIR"
+cat > "$HOOK" <<'EOF'
+#!/bin/bash
+exec "$(git rev-parse --show-toplevel)/scripts/check"
+EOF
+chmod +x "$HOOK"
+echo "[+] Installed pre-push hook: $HOOK"
